@@ -463,7 +463,6 @@ const outcome = await executeStepsFrom({
   triggerEvent: input.triggerType,
 })
 
-  })
 
   // Atomic counter update via the SQL function from migration 007.
   // Doing this with a client-side read-modify-write raced when the
@@ -474,8 +473,9 @@ const outcome = await executeStepsFrom({
   })
   if (rpcErr) {
     console.error('[automations] increment counter failed:', rpcErr)
-    return outcome
   }
+
+  return outcome
 }
 
 interface ExecuteArgs {
