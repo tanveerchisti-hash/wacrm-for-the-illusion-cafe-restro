@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   state: {
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
+    queriedTables: [] as string[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     updates: [] as { payload: Record<string, unknown>; isNull: string[] }[],
@@ -35,6 +36,7 @@ vi.mock('@/lib/whatsapp/meta-api', () => ({
 vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
+      h.state.queriedTables.push(table)
       if (table === 'automations') {
         // .select().eq().eq().in().limit() → active auto-responders
         const chain = {
@@ -114,15 +116,16 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   vi.clearAllMocks()
 
   h.state.conv = {
-
     assigned_agent_id: null,
     ai_autoreply_disabled: false,
     ai_reply_count: 0,
   }
   h.state.autoResponders = []
+  h.state.queriedTables = []
   h.state.claim = true
   h.state.updatePayload = null
   h.state.updates = []
@@ -162,27 +165,26 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(systemPrompt).toContain('Returns accepted within 30 days.')
   })
 
-  
-it('does not globally block AI when an automation is active', async () => {
-  h.state.autoResponders = [{ id: 'auto-1' }]
+  it('does not globally block AI when an automation is active', async () => {
+    // The webhook handles automation-vs-AI coordination per inbound.
+    // Merely having an active automation must not silence this dispatcher.
+    h.state.autoResponders = [{ id: 'auto-1' }]
 
-  await dispatchInboundToAiReply(ARGS)
+    await dispatchInboundToAiReply(ARGS)
 
-  expect(h.generateReply).toHaveBeenCalledTimes(1)
-
-  expect(h.engineSendText).toHaveBeenCalledWith(
-    expect.objectContaining({
-      conversationId: 'conv-1',
-      text: 'Hello!',
-    }),
-  )
-})
+    expect(h.state.queriedTables).not.toContain('automations')
+    expect(h.generateReply).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-1', text: 'Hello!' }),
+    )
+  })
 
 
   it('does not send when the atomic slot claim loses the race', async () => {
     h.state.claim = false
     await dispatchInboundToAiReply(ARGS)
-    // It still attempts the claim, but the send is skipped.
+    // The claim fails; no outbound message should be sent.
     expect(h.state.rpcCalls).toHaveLength(1)
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
