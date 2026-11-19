@@ -112,8 +112,12 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
   }
 }
 
+
 beforeEach(() => {
+  vi.clearAllMocks()
+
   h.state.conv = {
+
     assigned_agent_id: null,
     ai_autoreply_disabled: false,
     ai_reply_count: 0,
@@ -158,13 +162,22 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(systemPrompt).toContain('Returns accepted within 30 days.')
   })
 
-  it('stands down when an active message-level automation exists', async () => {
-    h.state.autoResponders = [{ id: 'auto-1' }]
-    await dispatchInboundToAiReply(ARGS)
-    expect(h.generateReply).not.toHaveBeenCalled()
-    expect(h.engineSendText).not.toHaveBeenCalled()
-    expect(h.sendTypingIndicator).not.toHaveBeenCalled()
-  })
+  
+it('does not globally block AI when an automation is active', async () => {
+  h.state.autoResponders = [{ id: 'auto-1' }]
+
+  await dispatchInboundToAiReply(ARGS)
+
+  expect(h.generateReply).toHaveBeenCalledTimes(1)
+
+  expect(h.engineSendText).toHaveBeenCalledWith(
+    expect.objectContaining({
+      conversationId: 'conv-1',
+      text: 'Hello!',
+    }),
+  )
+})
+
 
   it('does not send when the atomic slot claim loses the race', async () => {
     h.state.claim = false
