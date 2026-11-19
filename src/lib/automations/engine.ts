@@ -448,18 +448,21 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
 
   if (logErr || !log) {
     console.error('[automations] cannot create log:', logErr)
-    return
+    return null 
   }
 
-  await executeStepsFrom({
-    automation,
-    contactId: input.contactId ?? null,
-    context: input.context ?? {},
-    parentStepId: null,
-    branch: null,
-    startPosition: 0,
-    logId: log.id,
-    triggerEvent: input.triggerType,
+  
+const outcome = await executeStepsFrom({
+  automation,
+  contactId: input.contactId ?? null,
+  context: input.context ?? {},
+  parentStepId: null,
+  branch: null,
+  startPosition: 0,
+  logId: log.id,
+  triggerEvent: input.triggerType,
+})
+
   })
 
   // Atomic counter update via the SQL function from migration 007.
@@ -471,6 +474,7 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
   })
   if (rpcErr) {
     console.error('[automations] increment counter failed:', rpcErr)
+    return outcome
   }
 }
 
