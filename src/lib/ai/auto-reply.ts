@@ -45,7 +45,7 @@ interface DispatchArgs {
  *
  * The 24h WhatsApp session window is inherently open here — we're
  * reacting to a customer message that just landed — so no separate
- * window check is needed.
+ * window check is needed. 
  */
 export async function dispatchInboundToAiReply(
   args: DispatchArgs,
