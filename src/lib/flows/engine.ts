@@ -1073,6 +1073,38 @@ export async function dispatchInboundToFlows(
     }
 
     // No active run → look for a flow whose entry trigger matches.
+    
+    // Skip Welcome Flow when customer is ordering.
+    // Let the AI Agent handle subsequent messages.
+    if (input.message.kind === "text") {
+      const { data: orderingTag, error: tagError } = await db
+        .from("tags")
+        .select("id")
+        .eq("account_id", input.accountId)
+        .eq("name", "ordering_active")
+        .maybeSingle();
+
+      if (tagError) throw tagError;
+
+      if (orderingTag) {
+        const { data: contactTag, error: contactTagError } = await db
+          .from("contact_tags")
+          .select("tag_id")
+          .eq("contact_id", input.contactId)
+          .eq("tag_id", orderingTag.id)
+          .limit(1);
+
+        if (contactTagError) throw contactTagError;
+
+        if (contactTag && contactTag.length > 0) {
+          return {
+            consumed: false,
+            outcome: "no_match",
+          };
+        }
+      }
+    }
+
     const flow = await findEntryFlow(
       db,
       input.accountId,
