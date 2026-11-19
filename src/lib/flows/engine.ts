@@ -97,22 +97,53 @@ export function matchReplyId(
  * Used by the trigger evaluator. Stable enough that the v3 builder
  * UI can preview matches by passing canned strings.
  */
+
 export function matchesKeywordTrigger(
   text: string,
   cfg: KeywordTriggerConfig,
 ): boolean {
   if (!text || !cfg.keywords?.length) return false;
+
   const matchType = cfg.match_type ?? "contains";
-  const haystack = cfg.case_sensitive ? text : text.toLowerCase();
+
+  const normalize = (value: string) => {
+    const cleaned = value
+      .trim()
+      .replace(/[!?.,]+$/g, "")
+      .replace(/\s+/g, " ");
+
+    return cfg.case_sensitive
+      ? cleaned
+      : cleaned.toLowerCase();
+  };
+
+  const haystack = normalize(text);
+
   for (const raw of cfg.keywords) {
     if (!raw) continue;
-    const needle = cfg.case_sensitive ? raw : raw.toLowerCase();
-    if (matchType === "exact" ? haystack === needle : haystack.includes(needle)) {
+
+    const needle = normalize(raw);
+    if (!needle) continue;
+
+    // Short greetings must match the whole message.
+    const exactOnly = [
+      "hi", "hii", "hiii",
+      "hey", "heyy", "hy",
+      "hlo", "hloo", "gm"
+    ].includes(needle.toLowerCase());
+
+    if (
+      matchType === "exact" || exactOnly
+        ? haystack === needle
+        : haystack.includes(needle)
+    ) {
       return true;
     }
   }
+
   return false;
 }
+
 
 /**
  * The strings an inbound message offers to a flow's *entry* trigger.
@@ -1042,6 +1073,38 @@ export async function dispatchInboundToFlows(
     }
 
     // No active run → look for a flow whose entry trigger matches.
+    
+    // Skip Welcome Flow when customer is ordering.
+    // Let the AI Agent handle subsequent messages.
+    if (input.message.kind === "text") {
+      const { data: orderingTag, error: tagError } = await db
+        .from("tags")
+        .select("id")
+        .eq("account_id", input.accountId)
+        .eq("name", "ordering_active")
+        .maybeSingle();
+
+      if (tagError) throw tagError;
+
+      if (orderingTag) {
+        const { data: contactTag, error: contactTagError } = await db
+          .from("contact_tags")
+          .select("tag_id")
+          .eq("contact_id", input.contactId)
+          .eq("tag_id", orderingTag.id)
+          .limit(1);
+
+        if (contactTagError) throw contactTagError;
+
+        if (contactTag && contactTag.length > 0) {
+          return {
+            consumed: false,
+            outcome: "no_match",
+          };
+        }
+      }
+    }
+
     const flow = await findEntryFlow(
       db,
       input.accountId,
