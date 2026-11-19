@@ -45,7 +45,7 @@ interface DispatchArgs {
  *
  * The 24h WhatsApp session window is inherently open here — we're
  * reacting to a customer message that just landed — so no separate
- * window check is needed.
+ * window check is needed. 
  */
 export async function dispatchInboundToAiReply(
   args: DispatchArgs,
@@ -64,22 +64,11 @@ export async function dispatchInboundToAiReply(
     const config = await loadAiConfig(db, accountId)
     if (!config || !config.autoReplyEnabled) return
 
-    // Deterministic, user-configured responders win over the LLM — the
-    // caller already excludes messages a Flow consumed. Message-level
-    // automations (`new_message_received` / `keyword_match`) are
-    // dispatched independently for this same inbound and may send their
-    // own reply, so if the account has any active one we stand down to
-    // avoid double-texting the customer. (Relationship triggers like
-    // `first_inbound_message` don't count — they're not per-message
-    // auto-responders.)
-    const { data: autoResponders } = await db
-      .from('automations')
-      .select('id')
-      .eq('account_id', accountId)
-      .eq('is_active', true)
-      .in('trigger_type', ['new_message_received', 'keyword_match'])
-      .limit(1)
-    if (autoResponders && autoResponders.length > 0) return
+    
+    // Automation/AI coordination is handled by the webhook.
+    // Do not block AI merely because an automation is active.
+    // Only a matching, successfully handled inbound message
+    // should suppress the corresponding AI auto-reply.
 
     const { data: conv, error: convErr } = await db
       .from('conversations')

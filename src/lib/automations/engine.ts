@@ -69,17 +69,30 @@ export interface DispatchInput {
  * All errors are caught and logged; per-automation failures are
  * recorded into automation_logs with status='failed'.
  */
-export async function runAutomationsForTrigger(input: DispatchInput): Promise<void> {
+
+
+export interface AutomationDispatchResult {
+  matched: boolean
+  completed: boolean
+  responded: boolean
+}
+
+
+
+
+export async function runAutomationsForTrigger(
+  input: DispatchInput,
+): Promise<AutomationDispatchResult> {
+  const emptyResult: AutomationDispatchResult = {
+    matched: false,
+    completed: false,
+    responded: false,
+  }
+
   try {
     const db = supabaseAdmin()
 
-    // Tenant isolation. `contactId` can be caller-supplied (the manual
-    // POST /api/automations/engine entrypoint reads it straight from the
-    // request body), and every step below runs through the service-role
-    // client, which bypasses RLS. So before any step can touch the
-    // contact, verify it actually belongs to this account. A foreign or
-    // forged id is refused silently — callers are fire-and-forget, and a
-    // distinct error would leak whether a given contact UUID exists.
+    // Verify that the contact belongs to this account.
     if (input.contactId) {
       const { data: owned, error: ownErr } = await db
         .from('contacts')
@@ -87,22 +100,25 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
         .eq('id', input.contactId)
         .eq('account_id', input.accountId)
         .maybeSingle()
+
       if (ownErr) {
-        console.error('[automations] contact ownership check failed:', ownErr)
-        return
+        console.error(
+          '[automations] contact ownership check failed:',
+          ownErr,
+        )
+        return emptyResult
       }
+
       if (!owned) {
-        console.warn('[automations] contact not in account, refusing dispatch', input.contactId)
-        return
+        console.warn(
+          '[automations] contact not in account, refusing dispatch',
+          input.contactId,
+        )
+        return emptyResult
       }
     }
 
-    // Same argument for `context.conversation_id` (GHSA-m4fx-g6pr-hrw8).
-    // It rides in on the same caller-supplied body, and every send step
-    // writes a `messages` row and a `conversations` preview update keyed
-    // on it through the service-role client — so an unvalidated id let a
-    // caller inject a message into another tenant's conversation. Refuse
-    // the same way: silently, with no existence oracle.
+    // Verify conversation ownership before executing steps.
     if (input.context?.conversation_id) {
       const { data: conv, error: convErr } = await db
         .from('conversations')
@@ -110,19 +126,25 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
         .eq('id', input.context.conversation_id)
         .eq('account_id', input.accountId)
         .maybeSingle()
+
       if (convErr) {
-        console.error('[automations] conversation ownership check failed:', convErr)
-        return
+        console.error(
+          '[automations] conversation ownership check failed:',
+          convErr,
+        )
+        return emptyResult
       }
+
       if (!conv) {
         console.warn(
           '[automations] conversation not in account, refusing dispatch',
           input.context.conversation_id,
         )
-        return
+        return emptyResult
       }
     }
 
+    // Fetch automations matching this trigger type.
     const { data: automations, error } = await db
       .from('automations')
       .select('*')
@@ -132,22 +154,57 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
 
     if (error) {
       console.error('[automations] fetch failed:', error)
-      return
+      return emptyResult
     }
-    if (!automations || automations.length === 0) return
+
+    if (!automations || automations.length === 0) {
+      return emptyResult
+    }
+
+    let matched = false
+    let completed = false
+    let responded = false
 
     for (const automation of automations as Automation[]) {
-      if (!triggerMatches(automation, input.context)) continue
-      try {
-        await executeAutomation(automation, input)
-      } catch (err) {
-        console.error('[automations] execute failed:', automation.id, err)
+      if (!triggerMatches(automation, input.context)) {
+        continue
       }
+
+      matched = true
+
+      try {
+        const execution = await executeAutomation(
+          automation,
+          input,
+        )
+
+        if (execution?.outcome === 'completed') {
+          completed = true
+        }
+
+        if (execution?.responded) {
+          responded = true
+        }
+      } catch (err) {
+        console.error(
+          '[automations] execute failed:',
+          automation.id,
+          err,
+        )
+      }
+    }
+
+    return {
+      matched,
+      completed,
+      responded,
     }
   } catch (err) {
     console.error('[automations] dispatch failed:', err)
+    return emptyResult
   }
 }
+
 
 /**
  * Resume a run that was parked at a wait step. Called from the cron
@@ -448,19 +505,26 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
 
   if (logErr || !log) {
     console.error('[automations] cannot create log:', logErr)
-    return
+    return null 
   }
 
-  await executeStepsFrom({
-    automation,
-    contactId: input.contactId ?? null,
-    context: input.context ?? {},
-    parentStepId: null,
-    branch: null,
-    startPosition: 0,
-    logId: log.id,
-    triggerEvent: input.triggerType,
-  })
+  let responded = false
+  
+const outcome = await executeStepsFrom({
+  automation,
+  contactId: input.contactId ?? null,
+  context: input.context ?? {},
+  parentStepId: null,
+  branch: null,
+  startPosition: 0,
+  logId: log.id,
+  triggerEvent: input.triggerType,
+  onCustomerMessageSent: () => {
+  responded = true
+},
+})
+  
+
 
   // Atomic counter update via the SQL function from migration 007.
   // Doing this with a client-side read-modify-write raced when the
@@ -472,9 +536,12 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
   if (rpcErr) {
     console.error('[automations] increment counter failed:', rpcErr)
   }
+
+  return { outcome, responded }
 }
 
 interface ExecuteArgs {
+  onCustomerMessageSent?: () => void
   automation: Automation
   contactId: string | null
   context: AutomationContext
@@ -598,6 +665,16 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<ScopeOutcome> {
       }
 
       const detail = await runStep(step, args)
+      
+if (
+  step.step_type === 'send_message' ||
+  step.step_type === 'send_buttons' ||
+  step.step_type === 'send_list' ||
+  step.step_type === 'send_template'
+) {
+  args.onCustomerMessageSent?.()
+}
+
       if (waitsForReply(step)) {
         await parkForReply(step, args)
         results.push({
