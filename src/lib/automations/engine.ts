@@ -69,9 +69,143 @@ export interface DispatchInput {
  * All errors are caught and logged; per-automation failures are
  * recorded into automation_logs with status='failed'.
  */
-export async function runAutomationsForTrigger(input: DispatchInput): Promise<void> {
+
+
+export interface AutomationDispatchResult {
+  matched: boolean
+  completed: boolean
+  responded: boolean
+}
+
+
+
+
+export async function runAutomationsForTrigger(
+  input: DispatchInput,
+): Promise<AutomationDispatchResult> {
+  const emptyResult: AutomationDispatchResult = {
+    matched: false,
+    completed: false,
+    responded: false,
+  }
+
   try {
     const db = supabaseAdmin()
+
+    // Verify that the contact belongs to this account.
+    if (input.contactId) {
+      const { data: owned, error: ownErr } = await db
+        .from('contacts')
+        .select('id')
+        .eq('id', input.contactId)
+        .eq('account_id', input.accountId)
+        .maybeSingle()
+
+      if (ownErr) {
+        console.error(
+          '[automations] contact ownership check failed:',
+          ownErr,
+        )
+        return emptyResult
+      }
+
+      if (!owned) {
+        console.warn(
+          '[automations] contact not in account, refusing dispatch',
+          input.contactId,
+        )
+        return emptyResult
+      }
+    }
+
+    // Verify conversation ownership before executing steps.
+    if (input.context?.conversation_id) {
+      const { data: conv, error: convErr } = await db
+        .from('conversations')
+        .select('id')
+        .eq('id', input.context.conversation_id)
+        .eq('account_id', input.accountId)
+        .maybeSingle()
+
+      if (convErr) {
+        console.error(
+          '[automations] conversation ownership check failed:',
+          convErr,
+        )
+        return emptyResult
+      }
+
+      if (!conv) {
+        console.warn(
+          '[automations] conversation not in account, refusing dispatch',
+          input.context.conversation_id,
+        )
+        return emptyResult
+      }
+    }
+
+    // Fetch automations matching this trigger type.
+    const { data: automations, error } = await db
+      .from('automations')
+      .select('*')
+      .eq('account_id', input.accountId)
+      .eq('trigger_type', input.triggerType)
+      .eq('is_active', true)
+
+    if (error) {
+      console.error('[automations] fetch failed:', error)
+      return emptyResult
+    }
+
+    if (!automations || automations.length === 0) {
+      return emptyResult
+    }
+
+    let matched = false
+    let completed = false
+    let responded = false
+
+    for (const automation of automations as Automation[]) {
+      if (!triggerMatches(automation, input.context)) {
+        continue
+      }
+
+      matched = true
+
+      try {
+        const execution = await executeAutomation(
+          automation,
+          input,
+        )
+
+        if (execution?.outcome === 'completed') {
+          completed = true
+        }
+
+        if (execution?.responded) {
+          responded = true
+        }
+      } catch (err) {
+        console.error(
+          '[automations] execute failed:',
+          automation.id,
+          err,
+        )
+      }
+    }
+
+    return {
+      matched,
+      completed,
+      responded,
+    }
+  } catch (err) {
+    console.error('[automations] dispatch failed:', err)
+    return emptyResult
+  }
+}
+
+
 
     // Tenant isolation. `contactId` can be caller-supplied (the manual
     // POST /api/automations/engine entrypoint reads it straight from the
@@ -88,13 +222,14 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
         .eq('account_id', input.accountId)
         .maybeSingle()
       if (ownErr) {
-        console.error('[automations] contact ownership check failed:', ownErr)
-        return
-      }
+  console.error('[automations] contact ownership check failed:', ownErr)
+  return { matched: false, completed: false }
+}
+      
       if (!owned) {
-        console.warn('[automations] contact not in account, refusing dispatch', input.contactId)
-        return
-      }
+  console.warn('[automations] contact not in account, refusing dispatch', input.contactId)
+  return { matched: false, completed: false }
+}
     }
 
     // Same argument for `context.conversation_id` (GHSA-m4fx-g6pr-hrw8).
@@ -110,18 +245,19 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
         .eq('id', input.context.conversation_id)
         .eq('account_id', input.accountId)
         .maybeSingle()
-      if (convErr) {
-        console.error('[automations] conversation ownership check failed:', convErr)
-        return
-      }
-      if (!conv) {
-        console.warn(
-          '[automations] conversation not in account, refusing dispatch',
-          input.context.conversation_id,
-        )
-        return
-      }
-    }
+      
+if (convErr) {
+  console.error('[automations] conversation ownership check failed:', convErr)
+  return { matched: false, completed: false }
+}
+
+if (!conv) {
+  console.warn(
+    '[automations] conversation not in account, refusing dispatch',
+    input.context.conversation_id,
+  )
+  return { matched: false, completed: false }
+}
 
     const { data: automations, error } = await db
       .from('automations')
@@ -451,6 +587,7 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
     return null 
   }
 
+  let responded = false
   
 const outcome = await executeStepsFrom({
   automation,
@@ -461,7 +598,11 @@ const outcome = await executeStepsFrom({
   startPosition: 0,
   logId: log.id,
   triggerEvent: input.triggerType,
+  onCustomerMessageSent: () => {
+  responded = true
+},
 })
+  
 
 
   // Atomic counter update via the SQL function from migration 007.
@@ -475,10 +616,11 @@ const outcome = await executeStepsFrom({
     console.error('[automations] increment counter failed:', rpcErr)
   }
 
-  return outcome
+  return { outcome, responded }
 }
 
 interface ExecuteArgs {
+  onCustomerMessageSent?: () => void
   automation: Automation
   contactId: string | null
   context: AutomationContext
@@ -602,6 +744,16 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<ScopeOutcome> {
       }
 
       const detail = await runStep(step, args)
+      
+if (
+  step.step_type === 'send_message' ||
+  step.step_type === 'send_buttons' ||
+  step.step_type === 'send_list' ||
+  step.step_type === 'send_template'
+) {
+  args.onCustomerMessageSent?.()
+}
+
       if (waitsForReply(step)) {
         await parkForReply(step, args)
         results.push({
