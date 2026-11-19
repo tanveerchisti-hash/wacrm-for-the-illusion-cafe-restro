@@ -97,22 +97,53 @@ export function matchReplyId(
  * Used by the trigger evaluator. Stable enough that the v3 builder
  * UI can preview matches by passing canned strings.
  */
+
 export function matchesKeywordTrigger(
   text: string,
   cfg: KeywordTriggerConfig,
 ): boolean {
   if (!text || !cfg.keywords?.length) return false;
+
   const matchType = cfg.match_type ?? "contains";
-  const haystack = cfg.case_sensitive ? text : text.toLowerCase();
+
+  const normalize = (value: string) => {
+    const cleaned = value
+      .trim()
+      .replace(/[!?.,]+$/g, "")
+      .replace(/\s+/g, " ");
+
+    return cfg.case_sensitive
+      ? cleaned
+      : cleaned.toLowerCase();
+  };
+
+  const haystack = normalize(text);
+
   for (const raw of cfg.keywords) {
     if (!raw) continue;
-    const needle = cfg.case_sensitive ? raw : raw.toLowerCase();
-    if (matchType === "exact" ? haystack === needle : haystack.includes(needle)) {
+
+    const needle = normalize(raw);
+    if (!needle) continue;
+
+    // Short greetings must match the whole message.
+    const exactOnly = [
+      "hi", "hii", "hiii",
+      "hey", "heyy", "hy",
+      "hlo", "hloo", "gm"
+    ].includes(needle.toLowerCase());
+
+    if (
+      matchType === "exact" || exactOnly
+        ? haystack === needle
+        : haystack.includes(needle)
+    ) {
       return true;
     }
   }
+
   return false;
 }
+
 
 /**
  * The strings an inbound message offers to a flow's *entry* trigger.
