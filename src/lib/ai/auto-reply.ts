@@ -1,6 +1,7 @@
 import { supabaseAdmin } from './admin-client'
 import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
+import { getActiveOrderingSession } from '@/lib/ordering/session-timeout'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
@@ -45,7 +46,7 @@ interface DispatchArgs {
  *
  * The 24h WhatsApp session window is inherently open here — we're
  * reacting to a customer message that just landed — so no separate
- * window check is needed. 
+ * window check is needed.
  */
 export async function dispatchInboundToAiReply(
   args: DispatchArgs,
@@ -64,7 +65,7 @@ export async function dispatchInboundToAiReply(
     const config = await loadAiConfig(db, accountId)
     if (!config || !config.autoReplyEnabled) return
 
-    
+
     // Automation/AI coordination is handled by the webhook.
     // Do not block AI merely because an automation is active.
     // Only a matching, successfully handled inbound message
@@ -82,8 +83,26 @@ export async function dispatchInboundToAiReply(
     // below (this read can race a concurrent inbound).
     if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
 
-    const messages = await buildConversationContext(db, conversationId)
+
+    // Find the customer's current ordering session.
+    // When active, use only messages from this session.
+    const activeOrderingSession = await getActiveOrderingSession(
+      db,
+      accountId,
+      contactId,
+    )
+
+    const sessionStart = activeOrderingSession?.started_at
+
+    const messages = await buildConversationContext(
+      db,
+      conversationId,
+      undefined,
+      sessionStart,
+    )
+
     if (messages.length === 0) return
+
 
     // Account-wide throttle on the shared BYO key. The per-conversation
     // cap bounds one thread; this bounds a burst across many threads (a

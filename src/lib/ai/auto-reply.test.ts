@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   state: {
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
+    orderingSession: null as { started_at: string } | null,
     queriedTables: [] as string[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
@@ -37,6 +38,16 @@ vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
       h.state.queriedTables.push(table)
+      if (table === 'ordering_sessions') {
+        // getActiveOrderingSession(): .select().eq().eq().eq().maybeSingle()
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          maybeSingle: () =>
+            Promise.resolve({ data: h.state.orderingSession, error: null }),
+        }
+        return chain
+      }
       if (table === 'automations') {
         // .select().eq().eq().in().limit() → active auto-responders
         const chain = {
@@ -125,6 +136,7 @@ beforeEach(() => {
     ai_reply_count: 0,
   }
   h.state.autoResponders = []
+  h.state.orderingSession = null
   h.state.queriedTables = []
   h.state.claim = true
   h.state.updatePayload = null
@@ -163,6 +175,18 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.retrieveKnowledge).toHaveBeenCalled()
     const systemPrompt = h.generateReply.mock.calls[0][0].systemPrompt as string
     expect(systemPrompt).toContain('Returns accepted within 30 days.')
+  })
+
+  it('uses the current ordering session start to scope AI context', async () => {
+    h.state.orderingSession = { started_at: '2026-11-20T06:00:00.000Z' }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.buildConversationContext).toHaveBeenCalledWith(
+      expect.anything(),
+      'conv-1',
+      undefined,
+      '2026-11-20T06:00:00.000Z',
+    )
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
   })
 
   it('does not globally block AI when an automation is active', async () => {
