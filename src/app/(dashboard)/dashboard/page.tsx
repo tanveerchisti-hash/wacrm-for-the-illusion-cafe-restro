@@ -26,6 +26,7 @@ import { CampaignsCard } from '@/components/dashboard/campaigns-card'
 import { KpiRow } from '@/components/dashboard/kpi-row'
 import { MessageVolumeCard } from '@/components/dashboard/message-volume-card'
 import { OverviewHeader } from '@/components/dashboard/overview-header'
+import { PendingKitchenOrdersCard } from '@/components/dashboard/pending-kitchen-orders'
 import { PipelineCard } from '@/components/dashboard/pipeline-card'
 import { ReplyQueueCard } from '@/components/dashboard/reply-queue-card'
 import { SetupChecklist } from '@/components/dashboard/setup-checklist'
@@ -156,6 +157,7 @@ function DashboardPageInner() {
       ) : (
         <>
           <AttentionRow data={data} now={now} onlineCount={onlineCount} />
+          <PendingKitchenOrdersCard />
           <KpiRow data={data} currency={defaultCurrency} />
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
