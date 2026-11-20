@@ -2,6 +2,12 @@ import { supabaseAdmin } from './admin-client'
 import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
 import { getActiveOrderingSession } from '@/lib/ordering/session-timeout'
+import {
+  getActiveTrialOrder,
+  createTrialOrder,
+  extractOrderConfirmedMarker,
+} from '@/lib/restaurant/order-trial'
+import { isRestaurantTrialEnabled } from '@/lib/restaurant/feature-flag'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
@@ -91,6 +97,30 @@ export async function dispatchInboundToAiReply(
       accountId,
       contactId,
     )
+
+    // Stage 1 Gate: Do not let AI proceed to delivery or payment while kitchen approval is pending
+    if (isRestaurantTrialEnabled({ accountId })) {
+      try {
+        const activeTrialOrder = await getActiveTrialOrder(db, accountId, contactId)
+        if (activeTrialOrder && activeTrialOrder.status === 'pending_kitchen') {
+          const reminder =
+            `⏳ Your order *#${activeTrialOrder.order_number}* is currently awaiting kitchen confirmation ` +
+            `(target response: 2–3 minutes). Please wait while our kitchen reviews your order!`
+
+          await engineSendText({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            text: reminder,
+            aiGenerated: true,
+          })
+          return
+        }
+      } catch {
+        // Best-effort check - continue if trial order table is not present/mocked
+      }
+    }
 
     const sessionStart = activeOrderingSession?.started_at
 
@@ -221,12 +251,35 @@ export async function dispatchInboundToAiReply(
     }
     if (claimed !== true) return
 
+    let replyText = text
+    if (isRestaurantTrialEnabled({ accountId })) {
+      try {
+        const { cleanText, payload } = extractOrderConfirmedMarker(text)
+        if (payload && payload.items.length > 0) {
+          const newOrder = await createTrialOrder(db, {
+            accountId,
+            contactId,
+            conversationId,
+            orderingSessionId: activeOrderingSession?.id,
+            items: payload.items,
+            subtotal: payload.subtotal,
+          })
+          replyText =
+            cleanText ||
+            `⏳ Your order *#${newOrder.order_number}* has been sent to our kitchen for confirmation ` +
+              `(target response: 2–3 minutes). Please wait while our chef reviews your order!`
+        }
+      } catch (orderErr) {
+        console.warn('[ai auto-reply] trial order creation hook error:', orderErr)
+      }
+    }
+
     await engineSendText({
       accountId,
       userId: configOwnerUserId,
       conversationId,
       contactId,
-      text,
+      text: replyText,
       aiGenerated: true,
     })
   } catch (err) {

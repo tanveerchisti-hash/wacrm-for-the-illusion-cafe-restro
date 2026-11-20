@@ -27,6 +27,8 @@ import {
   startOrderingSession,
   expireInactiveOrderingSession,
 } from '@/lib/ordering/session-timeout'
+import { handleRestaurantTrialInbound } from '@/lib/restaurant/webhook-handler'
+import { isRestaurantTrialEnabled } from '@/lib/restaurant/feature-flag'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
   applyBroadcastRecipientStatus,
@@ -408,7 +410,8 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           // Default ON: the column is NOT NULL DEFAULT TRUE, but a row
           // read before migration 039 lands would have it undefined,
           // and losing attachments is the failure mode worth avoiding.
-          config.mirror_inbound_media !== false
+          config.mirror_inbound_media !== false,
+          phoneNumberId
         )
       }
     }
@@ -595,7 +598,8 @@ async function processMessage(
   accessToken: string,
   // Per-account opt-out for the inbound-media mirror (migration 039).
   // See parseMessageContent for what it turns off.
-  mirrorMedia: boolean
+  mirrorMedia: boolean,
+  phoneNumberId?: string
 ) {
   // Phone number OR business-scoped user ID — Meta sends only the
   // latter for a sender who has adopted a WhatsApp username (#519).
@@ -878,6 +882,39 @@ async function processMessage(
   // trigger installed in migration 003).
   await flagBroadcastReplyIfAny(accountId, contactRecord.id)
 
+  const inboundText = contentText ?? message.text?.body ?? ''
+
+  // ============================================================
+  // RESTAURANT TRIAL ORDER WORKFLOW
+  // Server-enforced feature flag: strictly scoped to authorized account and test phone number
+  // ============================================================
+  if (isRestaurantTrialEnabled({ accountId, phoneNumberId })) {
+    const trialResult = await handleRestaurantTrialInbound({
+      db: supabaseAdmin(),
+      accountId,
+      contactId: contactRecord.id,
+      conversationId: conversation.id,
+      configOwnerUserId,
+      message,
+      inboundText,
+      interactiveReplyId,
+    }).catch((err) => {
+      console.error('[webhook] restaurant trial handling failed:', err)
+      return { handled: false }
+    })
+
+    if (trialResult.handled) {
+      await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
+        conversation_id: conversation.id,
+        contact_id: contactRecord.id,
+        whatsapp_message_id: message.id,
+        content_type: contentType,
+        text: contentText,
+      })
+      return
+    }
+  }
+
   // ============================================================
   // Flow runner dispatch.
   //
@@ -924,7 +961,7 @@ async function processMessage(
   // message all exist before any step — including send_message — runs.
   // Fire-and-forget: a slow or failing automation must not block the
   // webhook's 200 OK response to Meta.
-  const inboundText = contentText ?? message.text?.body ?? ''
+  // inboundText already declared above
 
   // An automation parked at a "wait for reply" Send Buttons / Send List
   // step takes this message as its reply — a tap or typed text — and

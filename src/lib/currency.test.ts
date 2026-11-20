@@ -4,6 +4,7 @@ import {
   DEFAULT_CURRENCY,
   formatCurrency,
   formatCurrencyShort,
+  formatInr,
 } from "./currency";
 
 describe("formatCurrency", () => {
@@ -63,3 +64,35 @@ describe("formatCurrencyShort", () => {
     expect(formatCurrencyShort(1_000, "ZZZ")).toBe("ZZZ 1.0k");
   });
 });
+
+describe("formatInr", () => {
+  it("formats whole rupee amounts with Indian numbering system grouping (lakhs)", () => {
+    expect(formatInr(1234)).toBe("₹1,234");
+    expect(formatInr(100000)).toBe("₹1,00,000");
+    expect(formatInr(10000000)).toBe("₹1,00,00,000");
+  });
+
+  it("defaults to 0 decimal places", () => {
+    expect(formatInr(250)).toBe("₹250");
+    expect(formatInr(250.75)).toBe("₹251");
+  });
+
+  it("formats with custom decimal places when specified", () => {
+    expect(formatInr(250.5, { decimals: 2 })).toBe("₹250.50");
+    expect(formatInr(250, { decimals: 2 })).toBe("₹250.00");
+  });
+
+  it("supports compact formatting", () => {
+    expect(formatInr(1500, { compact: true })).toBe("₹1.5k");
+    expect(formatInr(2500000, { compact: true })).toBe("₹2.5M");
+    expect(formatInr(900, { compact: true })).toBe("₹900");
+  });
+
+  it("handles 0, negative values, and non-finite numbers safely without throwing", () => {
+    expect(formatInr(0)).toBe("₹0");
+    expect(formatInr(-500)).toBe("-₹500");
+    expect(formatInr(Number.NaN)).toBe("₹0");
+    expect(formatInr(Number.POSITIVE_INFINITY)).toBe("₹0");
+  });
+});
+

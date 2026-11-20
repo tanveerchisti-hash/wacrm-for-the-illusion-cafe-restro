@@ -109,3 +109,43 @@ export function formatCompactNumber(value: number): string {
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
   return v.toFixed(0);
 }
+
+export interface FormatInrOptions {
+  /** Number of decimal places. Defaults to 0 (whole rupee amounts). */
+  decimals?: number;
+  /** Whether to use compact notation (e.g. ₹1.5k, ₹2.5M). Defaults to false. */
+  compact?: boolean;
+}
+
+/**
+ * Format an amount in Indian Rupees (INR) using Indian numbering system
+ * grouping (en-IN: 1,00,000) and the ₹ symbol.
+ *
+ * Never throws: non-finite or missing values are safely coerced to 0.
+ */
+export function formatInr(
+  value: number,
+  options: FormatInrOptions = {},
+): string {
+  const amount = Number(value) || 0;
+  if (!Number.isFinite(amount)) {
+    return '₹0';
+  }
+
+  if (options.compact) {
+    return `₹${formatCompactNumber(amount)}`;
+  }
+
+  const decimals = Math.max(0, Math.min(20, options.decimals ?? 0));
+  try {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    }).format(amount);
+  } catch {
+    return `₹${amount.toFixed(decimals)}`;
+  }
+}
+
