@@ -22,6 +22,11 @@ import { readCappedBody } from '@/lib/whatsapp/webhook-body'
 import { resumeAwaitingReply, runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
+import {
+  getActiveOrderingSession,
+  startOrderingSession,
+  expireInactiveOrderingSession,
+} from '@/lib/ordering/session-timeout'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
   applyBroadcastRecipientStatus,
@@ -775,6 +780,99 @@ async function processMessage(
   // SQL — see the helper for why that matters.
   await reopenClosedConversation(supabaseAdmin(), conversation)
 
+  // ==========================================================
+  // ORDERING SESSION: 6-HOUR INACTIVITY HANDLING
+  // Must run after webhook deduplication and before Flow/AI.
+  // ==========================================================
+
+  try {
+    const orderingDb = supabaseAdmin()
+
+
+    let activeSession = await getActiveOrderingSession(
+      orderingDb,
+      accountId,
+      contactRecord.id,
+    )
+
+    // Customers tagged before session tracking existed
+    // need a one-time legacy migration.
+    if (!activeSession) {
+      const { data: legacyResult, error: legacyError } =
+        await orderingDb.rpc(
+          'bootstrap_legacy_ordering_session',
+          {
+            p_account_id: accountId,
+            p_contact_id: contactRecord.id,
+            p_conversation_id: conversation.id,
+            p_message_id: message.id,
+            p_received_at: receivedAt,
+          },
+        )
+
+      if (legacyError) throw legacyError
+
+      if (legacyResult === 'legacy_bootstrapped') {
+        activeSession = await getActiveOrderingSession(
+          orderingDb,
+          accountId,
+          contactRecord.id,
+        )
+      }
+
+      if (legacyResult === 'legacy_expired') {
+        console.info(
+          '[ordering-session] legacy tag expired:',
+          contactRecord.id,
+        )
+      }
+    }
+
+    if (activeSession) {
+
+      const expired = await expireInactiveOrderingSession(
+        orderingDb,
+        accountId,
+        contactRecord.id,
+      )
+
+      if (expired) {
+        console.info(
+          '[ordering-session] expired due to inactivity:',
+          contactRecord.id,
+        )
+      } else {
+        const messageTime = new Date(receivedAt)
+        const lastActivity = new Date(
+          activeSession.last_customer_activity_at,
+        )
+
+        // Only genuinely newer customer activity refreshes
+        // the existing ordering session.
+        if (
+          Number.isFinite(messageTime.getTime()) &&
+          Number.isFinite(lastActivity.getTime()) &&
+          messageTime.getTime() > lastActivity.getTime()
+        ) {
+          await startOrderingSession(
+            orderingDb,
+            {
+              accountId,
+              contactId: contactRecord.id,
+              conversationId: conversation.id,
+            },
+            messageTime,
+          )
+        }
+      }
+    }
+  } catch (error) {
+    console.error(
+      '[ordering-session] inactivity handling failed:',
+      error,
+    )
+  }
+
   // If this contact was a recent broadcast recipient, flag the reply
   // so the broadcast's `replied_count` advances (via the aggregate
   // trigger installed in migration 003).
@@ -884,7 +982,7 @@ async function processMessage(
   // logging zero steps. `runAutomationsForTrigger` owns its own try/catch
   // and never throws; the `.catch` is belt-and-braces so one trigger
   // type's failure can't skip the rest of the loop.
-  
+
 let automationResponded = false
 
 for (const triggerType of automationTriggers) {
@@ -913,7 +1011,7 @@ for (const triggerType of automationTriggers) {
   // the account has enabled it. Awaited inside `after()` (same reason as
   // the webhook dispatch below); `dispatchInboundToAiReply` owns its
   // eligibility gates + try/catch and never throws.
-  
+
 if (
   !contentConsumed &&
   !automationResponded &&

@@ -45,3 +45,8 @@ next-env.d.ts
 
 # supabase
 supabase/.temp/
+
+.env.local
+
+# Local test output
+/test-results.txt

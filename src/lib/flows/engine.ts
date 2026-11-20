@@ -43,6 +43,7 @@ import { decideFallback, resolveFallbackPolicy } from "./fallback";
 import { addContactTagAndDispatch } from "@/lib/contacts/tag-events";
 import { removeContactTag } from "@/lib/contacts/tag-write";
 import { checkRunTimeout, markRunTimedOut, type RunTimeoutCheck } from "./timeout";
+import { startOrderingSession } from "@/lib/ordering/session-timeout";
 import {
   type CollectInputNodeConfig,
   type ConditionNodeConfig,
@@ -827,6 +828,33 @@ async function advanceFromNodeKey(
               vars: run.vars,
             },
           });
+
+
+          // Start tracking the ordering session
+          // after the ordering_active tag is applied.
+          const { data: orderingTag, error: tagError } = await db
+            .from("tags")
+            .select("id")
+            .eq("account_id", run.account_id)
+            .eq("id", cfg.tag_id)
+            .eq("name", "ordering_active")
+            .maybeSingle();
+
+          if (tagError) throw tagError;
+
+          if (
+            orderingTag &&
+            run.contact_id &&
+            run.conversation_id
+          ) {
+            await startOrderingSession(db, {
+              accountId: run.account_id,
+              contactId: run.contact_id,
+              conversationId: run.conversation_id,
+            });
+          }
+
+
         } else {
           await removeContactTag(db, {
             accountId: run.account_id,
@@ -1073,7 +1101,7 @@ export async function dispatchInboundToFlows(
     }
 
     // No active run → look for a flow whose entry trigger matches.
-    
+
     // Skip Welcome Flow when customer is ordering.
     // Let the AI Agent handle subsequent messages.
     if (input.message.kind === "text") {

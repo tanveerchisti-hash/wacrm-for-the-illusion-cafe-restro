@@ -26,6 +26,8 @@ import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
 import { getT } from '@/lib/i18n/translate'
 import { isWithinTimeWindow } from './time-of-day'
+import { closeOrderingSessionOnManualReset } from '@/lib/ordering/session-timeout'
+
 
 /** Step errors land in automation_logs and are shown on the logs page. */
 const tErr = getT('LibErrors.engine')
@@ -505,11 +507,11 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
 
   if (logErr || !log) {
     console.error('[automations] cannot create log:', logErr)
-    return null 
+    return null
   }
 
   let responded = false
-  
+
 const outcome = await executeStepsFrom({
   automation,
   contactId: input.contactId ?? null,
@@ -523,7 +525,7 @@ const outcome = await executeStepsFrom({
   responded = true
 },
 })
-  
+
 
 
   // Atomic counter update via the SQL function from migration 007.
@@ -665,7 +667,7 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<ScopeOutcome> {
       }
 
       const detail = await runStep(step, args)
-      
+
 if (
   step.step_type === 'send_message' ||
   step.step_type === 'send_buttons' ||
@@ -921,18 +923,50 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       return `tag ${cfg.tag_id} added and tag_added dispatched`
     }
 
+
     case 'remove_tag': {
-      // See add_tag: tenant scoping relies on the runAutomationsForTrigger
-      // ownership guard, since contact_tags carries no account_id.
       const cfg = step.step_config as TagStepConfig
-      if (!args.contactId || !cfg.tag_id) throw new Error(tErr('needsContactAndTag', { step: 'remove_tag' }))
-      await db
+
+      if (!args.contactId || !cfg.tag_id) {
+        throw new Error(
+          tErr('needsContactAndTag', { step: 'remove_tag' }),
+        )
+      }
+
+      // Determine whether this is the ordering_active tag
+      // belonging to the current WACRM account.
+      const { data: orderingTag, error: tagError } = await db
+        .from('tags')
+        .select('id')
+        .eq('id', cfg.tag_id)
+        .eq('account_id', args.automation.account_id)
+        .eq('name', 'ordering_active')
+        .maybeSingle()
+
+      if (tagError) throw tagError
+
+      // Remove the tag association from this contact.
+      const { error: removeError } = await db
         .from('contact_tags')
         .delete()
         .eq('contact_id', args.contactId)
         .eq('tag_id', cfg.tag_id)
+
+      if (removeError) throw removeError
+
+      // Only an ordering_active tag removal should
+      // close the associated ordering session.
+      if (orderingTag) {
+        await closeOrderingSessionOnManualReset(
+          db,
+          args.automation.account_id,
+          args.contactId,
+        )
+      }
+
       return `tag ${cfg.tag_id} removed`
     }
+
 
     case 'assign_conversation': {
       const cfg = step.step_config as AssignConversationStepConfig
