@@ -13,6 +13,8 @@ import {
   Loader2,
   Layers,
   Sparkles,
+  Play,
+  Activity,
 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { GatedButton } from '@/components/ui/gated-button'
@@ -64,6 +66,16 @@ import type {
 } from '@/lib/backend-flows/types'
 import type { CanvasValidationResult } from '@/lib/backend-flows/canvas-types'
 
+interface RunRecord {
+  id: string
+  version_number: number
+  triggered_by: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'timed_out'
+  duration_ms?: number
+  error_message?: string
+  created_at: string
+}
+
 interface PageProps {
   params: Promise<{ id: string }>
 }
@@ -77,9 +89,11 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
 
   const [flow, setFlow] = useState<BackendFlow | null>(null)
   const [versions, setVersions] = useState<BackendFlowVersion[]>([])
+  const [runs, setRuns] = useState<RunRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
+  const [runningTest, setRunningTest] = useState(false)
   const [publishDialogOpen, setPublishDialogOpen] = useState(false)
   const [changeSummary, setChangeSummary] = useState('')
 
@@ -139,10 +153,54 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
     }
   }, [id])
 
+  const loadRuns = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/backend-flows/${id}/runs`)
+      if (res.ok) {
+        const data = await res.json()
+        setRuns(data.runs || [])
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }, [id])
+
   useEffect(() => {
     loadFlow()
     loadVersions()
-  }, [loadFlow, loadVersions])
+    loadRuns()
+  }, [loadFlow, loadVersions, loadRuns])
+
+  const handleTestRun = async () => {
+    setRunningTest(true)
+    try {
+      const res = await fetch(`/api/backend-flows/${id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payload: {
+            test_mode: true,
+            timestamp: new Date().toISOString(),
+          },
+        }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Test run failed')
+
+      if (data.run?.status === 'completed') {
+        toast.success(`Workflow test run completed in ${data.run.durationMs}ms!`)
+      } else {
+        toast.error(`Workflow test run ${data.run?.status}: ${data.run?.errorMessage || 'Check execution logs'}`)
+      }
+      loadRuns()
+      loadFlow()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Test run failed')
+    } finally {
+      setRunningTest(false)
+    }
+  }
 
   const handleSave = async () => {
     let parsedTriggerConfig = {}
@@ -303,9 +361,22 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
 
           <GatedButton
             canAct={canEdit}
+            gateReason="test run workflows"
+            onClick={handleTestRun}
+            disabled={runningTest || saving}
+            variant="secondary"
+            size="sm"
+            className="flex items-center gap-1.5"
+          >
+            {runningTest ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+            Test Run
+          </GatedButton>
+
+          <GatedButton
+            canAct={canEdit}
             gateReason="edit workflows"
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || runningTest}
             variant="outline"
             size="sm"
             className="flex items-center gap-1.5"
@@ -341,6 +412,10 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
           <TabsTrigger value="versions" className="flex items-center gap-2">
             <History className="h-4 w-4" />
             Version History ({versions.length})
+          </TabsTrigger>
+          <TabsTrigger value="runs" className="flex items-center gap-2">
+            <Activity className="h-4 w-4" />
+            Execution Runs ({runs.length})
           </TabsTrigger>
         </TabsList>
 
@@ -580,6 +655,83 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Tab 4: Execution Runs */}
+        <TabsContent value="runs">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-primary" />
+                    Execution Run Trace
+                  </CardTitle>
+                  <CardDescription>
+                    Real-time execution log showing step duration, trigger source, and completion status.
+                  </CardDescription>
+                </div>
+                <Button variant="outline" size="sm" onClick={loadRuns} className="h-8 gap-1.5">
+                  Refresh Runs
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {runs.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  No execution runs recorded yet. Click &quot;Test Run&quot; above to simulate a pipeline execution.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {runs.map((r) => {
+                    const isSuccess = r.status === 'completed'
+                    const isRunning = r.status === 'running'
+                    return (
+                      <div
+                        key={r.id}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 border rounded-lg bg-card/60"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              variant="outline"
+                              className={
+                                isSuccess
+                                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 text-xs'
+                                  : isRunning
+                                  ? 'bg-sky-500/10 text-sky-400 border-sky-500/30 text-xs'
+                                  : 'bg-rose-500/10 text-rose-400 border-rose-500/30 text-xs'
+                              }
+                            >
+                              {r.status.toUpperCase()}
+                            </Badge>
+                            <span className="font-semibold text-sm">Run on v{r.version_number}</span>
+                            <span className="text-xs text-muted-foreground">
+                              via {r.triggered_by}
+                            </span>
+                          </div>
+                          {r.error_message && (
+                            <p className="text-xs text-rose-400 font-mono">
+                              Error: {r.error_message}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex sm:flex-col items-center sm:items-end justify-between text-xs text-muted-foreground">
+                          {r.duration_ms !== undefined && (
+                            <span className="font-mono text-foreground">
+                              {r.duration_ms} ms
+                            </span>
+                          )}
+                          <span>{new Date(r.created_at).toLocaleString()}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </CardContent>
