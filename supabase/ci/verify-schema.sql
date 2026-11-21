@@ -163,6 +163,10 @@ BEGIN
     RAISE EXCEPTION 'anon can execute dashboard_overview — migration 059 grants are wrong';
   END IF;
 
+  IF to_regclass('public.restaurant_trial_draft_carts') IS NULL THEN
+    RAISE EXCEPTION 'public.restaurant_trial_draft_carts is missing — migration 202611210001 did not apply';
+  END IF;
+
   RAISE NOTICE 'schema verification passed';
 END
 $$;

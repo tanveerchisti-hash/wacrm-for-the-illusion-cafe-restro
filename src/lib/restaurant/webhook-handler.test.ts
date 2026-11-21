@@ -5,6 +5,7 @@ import {
   isOrderConfirmationPhrase,
   parseSummaryFromText,
 } from './webhook-handler'
+import { resetAllMemoryDraftCarts } from './draft-cart'
 
 // Mock meta-send so no actual network calls happen
 vi.mock('@/lib/flows/meta-send', () => ({
@@ -45,6 +46,7 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
 
   beforeEach(() => {
     vi.clearAllMocks()
+    resetAllMemoryDraftCarts()
   })
 
   describe('Bug 2: Order confirmation phrases', () => {
@@ -198,27 +200,9 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
       expect(parsed).toBeNull()
     })
 
-    it('requests clarification and does NOT create a dummy Veg Burger order when summary is unparseable', async () => {
+    it('politely informs that no active order was found when customer confirms without a draft cart', async () => {
       const db = {
-        from: vi.fn((table: string) => {
-          if (table === 'restaurant_trial_orders') {
-            return createChainedMock(null)
-          }
-          if (table === 'messages') {
-            const query = createChainedMock()
-            query.limit = vi.fn().mockResolvedValue({
-              data: [
-                {
-                  content_text:
-                    'Your Order Summary:\nSomething went wrong with menu\nConfirm Details (1)',
-                },
-              ],
-              error: null,
-            })
-            return query
-          }
-          return createChainedMock(null)
-        }),
+        from: vi.fn(() => createChainedMock(null)),
       } as unknown as SupabaseClient
 
       const result = await handleRestaurantTrialInbound({
@@ -232,46 +216,13 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
         interactiveReplyId: null,
       })
 
-      // Handled with clarification message, without creating order
       expect(result.handled).toBe(true)
       const { engineSendText } = await import('@/lib/flows/meta-send')
       expect(engineSendText).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: expect.stringContaining("couldn't confirm the exact items"),
+          text: expect.stringContaining('No active order found'),
         }),
       )
-    })
-
-    it('returns handled: false when inbound is just a generic yes/1 with no prior order summary in conversation', async () => {
-      const db = {
-        from: vi.fn((table: string) => {
-          if (table === 'restaurant_trial_orders') {
-            return createChainedMock(null)
-          }
-          if (table === 'messages') {
-            const query = createChainedMock()
-            query.limit = vi.fn().mockResolvedValue({
-              data: [{ content_text: 'Welcome to our store! We are open 9am to 10pm.' }],
-              error: null,
-            })
-            return query
-          }
-          return createChainedMock(null)
-        }),
-      } as unknown as SupabaseClient
-
-      const result = await handleRestaurantTrialInbound({
-        db,
-        accountId: ACCOUNT_ID,
-        contactId: CONTACT_ID,
-        conversationId: CONVERSATION_ID,
-        configOwnerUserId: USER_ID,
-        message: { id: 'msg-2', type: 'text' },
-        inboundText: '1',
-        interactiveReplyId: null,
-      })
-
-      expect(result.handled).toBe(false)
     })
   })
 
@@ -594,34 +545,23 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
     })
 
     it('modifies previous cart when removing an item', async () => {
-      const previousSummary =
-        `🍽️ ILLUSION CAFE & RESTAURANT\n\n` +
-        `📜 Your Order Summary\n\n` +
-        `🍕 1 x Chicken Pizza (7-inch)\n` +
-        `₹149 x 1 = ₹149\n\n` +
-        `☕ 2 x Cold Coffee (200 ml)\n` +
-        `₹99 x 2 = ₹198\n\n` +
-        `💰 Food Subtotal: ₹347\n` +
-        `🚚 Delivery Charge: FREE (₹300+)\n\n` +
-        `💳 Estimated Total: ₹347\n`
-
       const db = {
-        from: vi.fn((table: string) => {
-          if (table === 'restaurant_trial_orders') {
-            return createChainedMock(null)
-          }
-          if (table === 'messages') {
-            const query = createChainedMock()
-            query.limit = vi.fn().mockResolvedValue({
-              data: [{ content_text: previousSummary }],
-              error: null,
-            })
-            return query
-          }
-          return createChainedMock(null)
-        }),
+        from: vi.fn(() => createChainedMock(null)),
       } as unknown as SupabaseClient
 
+      // Step 1: Customer creates cart with 1 Chicken Pizza + 2 Cold Coffee
+      await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-mod-0', type: 'text' },
+        inboundText: '1 Chicken Pizza aur 2 Cold Coffee',
+        interactiveReplyId: null,
+      })
+
+      // Step 2: Customer asks to remove cold coffee
       const result = await handleRestaurantTrialInbound({
         db,
         accountId: ACCOUNT_ID,
@@ -643,6 +583,234 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
       expect(engineSendText).toHaveBeenCalledWith(
         expect.objectContaining({
           text: expect.stringContaining('Chicken Pizza [7-inch]'),
+        }),
+      )
+    })
+  })
+
+  describe('Mandatory Regression Tests (Cart Persistence & Confirmation)', () => {
+    it('Test A: customer selects 4 items (subtotal ₹1,330) and confirms with "1"; saved cart is retrieved and order created', async () => {
+      const capturedOrders: { subtotal?: number; items?: unknown[] }[] = []
+      const createdOrder = {
+        id: 'order-test-a',
+        account_id: ACCOUNT_ID,
+        contact_id: CONTACT_ID,
+        conversation_id: CONVERSATION_ID,
+        order_number: 'ORD-789001',
+        status: 'pending_kitchen',
+        subtotal: 1330,
+        delivery_fee: 0,
+        total_amount: 1330,
+      }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            const query = createChainedMock(null)
+            query.insert = vi.fn().mockImplementation((payload) => {
+              capturedOrders.push(payload)
+              return {
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({ data: createdOrder, error: null }),
+                }),
+              }
+            })
+            return query
+          }
+          return createChainedMock(null)
+        }),
+      } as unknown as SupabaseClient
+
+      // Step 1: Customer selects items
+      const selectResult = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-a1', type: 'text' },
+        inboundText: 'Chicken malai box 2 aur malai kabab 2, 4 cold coffee, malai chicken pizza 2 kardo',
+        interactiveReplyId: null,
+      })
+      expect(selectResult.handled).toBe(true)
+
+      // Step 2: Customer replies "1" to confirm
+      const confirmResult = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-a2', type: 'text' },
+        inboundText: '1',
+        interactiveReplyId: null,
+      })
+      expect(confirmResult.handled).toBe(true)
+      expect(capturedOrders).toHaveLength(1)
+      expect(capturedOrders[0].subtotal).toBe(1330)
+      expect(capturedOrders[0].items).toHaveLength(4)
+
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Order #ORD-789001 Received!'),
+        }),
+      )
+    })
+
+    it('Test B: 1 Chicken Pizza + 2 Cold Coffee (subtotal ₹347); customer replies "Yes confirm this"; saved cart retrieved correctly', async () => {
+      const capturedOrders: { subtotal?: number; items?: unknown[] }[] = []
+      const createdOrder = {
+        id: 'order-test-b',
+        account_id: ACCOUNT_ID,
+        contact_id: CONTACT_ID,
+        conversation_id: CONVERSATION_ID,
+        order_number: 'ORD-789002',
+        status: 'pending_kitchen',
+        subtotal: 347,
+        delivery_fee: 0,
+        total_amount: 347,
+      }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            const query = createChainedMock(null)
+            query.insert = vi.fn().mockImplementation((payload) => {
+              capturedOrders.push(payload)
+              return {
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({ data: createdOrder, error: null }),
+                }),
+              }
+            })
+            return query
+          }
+          return createChainedMock(null)
+        }),
+      } as unknown as SupabaseClient
+
+      // Step 1: Customer selects items
+      await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-b1', type: 'text' },
+        inboundText: 'Ek chicken pizza aur 2 cold coffee',
+        interactiveReplyId: null,
+      })
+
+      // Step 2: Customer replies "Yes confirm this"
+      const confirmResult = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-b2', type: 'text' },
+        inboundText: 'Yes confirm this',
+        interactiveReplyId: null,
+      })
+
+      expect(confirmResult.handled).toBe(true)
+      expect(capturedOrders).toHaveLength(1)
+      expect(capturedOrders[0].subtotal).toBe(347)
+      expect(capturedOrders[0].items).toHaveLength(2)
+
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Order #ORD-789002 Received!'),
+        }),
+      )
+    })
+
+    it('Test C: customer sends items together with "confirm kar do"; parses all 4 items and saves draft, not accidentally confirming old cart', async () => {
+      const db = {
+        from: vi.fn(() => createChainedMock(null)),
+      } as unknown as SupabaseClient
+
+      const inboundText = 'Chicken malai box 2 aur malai kabab 2, 4 cold coffee, malai chicken pizza 2 ye order confirm kar do'
+
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-c1', type: 'text' },
+        inboundText,
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      // Must present the verified summary with all 4 items and subtotal 1330
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Food Subtotal: ₹1,330'),
+        }),
+      )
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('1️⃣ Confirm Details'),
+        }),
+      )
+    })
+
+    it('Test D: duplicate confirmation webhook must never create duplicate orders', async () => {
+      const existingOrder = {
+        id: 'order-test-d',
+        account_id: ACCOUNT_ID,
+        contact_id: CONTACT_ID,
+        conversation_id: CONVERSATION_ID,
+        order_number: 'ORD-789004',
+        status: 'pending_kitchen',
+        subtotal: 347,
+        delivery_fee: 0,
+        total_amount: 347,
+      }
+
+      let insertCount = 0
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            const query = createChainedMock(existingOrder)
+            query.insert = vi.fn().mockImplementation(() => {
+              insertCount++
+              return {
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({ data: existingOrder, error: null }),
+                }),
+              }
+            })
+            return query
+          }
+          return createChainedMock(null)
+        }),
+      } as unknown as SupabaseClient
+
+      // Customer sends duplicate confirmation "1"
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-dup-1', type: 'text' },
+        inboundText: '1',
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      // Zero inserts attempted
+      expect(insertCount).toBe(0)
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('already received and awaiting kitchen confirmation'),
         }),
       )
     })
