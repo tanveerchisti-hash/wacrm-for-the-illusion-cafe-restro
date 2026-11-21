@@ -35,11 +35,14 @@ export function isOrderConfirmationPhrase(text: string): boolean {
     return true
   }
 
-  // 2. Explicit English and Hinglish phrases (e.g. "confirm", "yes confirm", "ha confirm", "confirm kardo", "order confirm")
+  // 2. Explicit confirmation phrases in English, Hindi, or Hinglish:
+  // e.g. "confirm", "yes confirm", "yes confirm this", "confirm this", "confirm it", "please confirm",
+  // "order confirm kardo", "order kr de yahi", "ha confirm", "place order", "proceed"
   if (
-    /^(?:(?:ha|haan|ji\s+ha|yes|ok|okay)[,.\s]+)?(?:confirm(?:\s+(?:order|details|my\s+order|kardo|kar\s*do|kijiye|karo))?|order\s+confirm(?:\s*(?:kardo|kar\s*do))?|place\s+order|proceed|kardo\s+confirm)$/i.test(
-      trimmed,
-    )
+    /\bconfirm\b/i.test(trimmed) ||
+    /^(?:yes|ha|haan|ji\s+ha|ok|okay)[,.\s]*(?:confirm|kardo|kar\s*do|kijiye|karo|proceed|place\s*order)?$/i.test(trimmed) ||
+    /^(?:order\s*(?:kr\s*de|kardo|kar\s*do|karo|place|confirm|lagado|laga\s*do))/i.test(trimmed) ||
+    /^(?:place\s*order|proceed\s*with\s*order|proceed)$/i.test(trimmed)
   ) {
     return true
   }
@@ -49,15 +52,10 @@ export function isOrderConfirmationPhrase(text: string): boolean {
 
 /**
  * Parses itemized lines and total from a recent bot order summary message.
- * Supports real-world WhatsApp summaries with emojis, multiline prices,
- * formatted item lines, and item options.
- *
- * Example summary inputs:
- * "1. Chicken Malai Box (4 pieces) - ₹119"
- * "2. Malai Kabab (4 pieces) - ₹199"
- * "3. Cold Coffee (4) - ₹396"
- * "• 1x Margherita Pizza - ₹250"
- * "Total: ₹964"
+ * Supports:
+ * - Single-line item with price (e.g. "• 1x Chicken Pizza (7-inch) - ₹149")
+ * - Two-line format (Line 1: "🍕 1 x Chicken Pizza (7-inch)", Line 2: "₹149 x 1 = ₹149")
+ * - Subtotals & estimated totals (e.g. "Food Subtotal: ₹347", "Estimated Total: ₹347")
  */
 export function parseSummaryFromText(summaryText: string): {
   items: TrialOrderItem[]
@@ -67,7 +65,7 @@ export function parseSummaryFromText(summaryText: string): {
   const items: TrialOrderItem[] = []
   let subtotal = 0
 
-  // Filter out non-food menu options presented to customer
+  // Filter out non-food menu options and action labels presented to customer
   const ignoredOptionPatterns = [
     /confirm\s*(?:details|order)/i,
     /add\s*more\s*items/i,
@@ -80,77 +78,87 @@ export function parseSummaryFromText(summaryText: string): {
     /cash\s*or\s*upi/i,
     /view\s*menu/i,
     /submit\s*review/i,
+    /what'?s\s*next/i,
+    /would\s*you\s*like\s*to/i,
+    /delivery\s*charge/i,
+    /illusion\s*cafe/i,
+    /your\s*order\s*summary/i,
   ]
 
-  for (const line of lines) {
-    // 1. Skip non-item option lines
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
     if (ignoredOptionPatterns.some((pattern) => pattern.test(line))) {
       continue
     }
 
-    // 2. Check for Total / Subtotal line
+    // 1. Check for Total / Subtotal line
     const totalMatch = line.match(
-      /(?:\*|_)?(?:total(?:\s+amount)?|subtotal|bill|grand\s*total)(?:\*|_)?[\s*:\-–=]+(?:\*|_)?₹?\s*(\d+(?:\.\d+)?)/i,
+      /(?:\*|_)?(?:food\s*subtotal|subtotal|estimated\s*total|total\s*amount|grand\s*total|bill|total)(?:\*|_)?[\s*:\-–=]+(?:\*|_)?₹?\s*(\d+(?:\.\d+)?)/i,
     )
     if (totalMatch) {
       const parsedTotal = parseFloat(totalMatch[1])
-      if (parsedTotal > 0) {
+      if (parsedTotal > 0 && subtotal === 0) {
         subtotal = parsedTotal
       }
       continue
     }
 
-    // 3. Match items with price.
-    // Supports patterns:
-    // "- 2x Veg Burger: ₹240"
-    // "1. Chicken Malai Box (4 pieces) - ₹119"
-    // "• 2x Malai Chicken Pizza (7 inch) - ₹298"
-    // "Cold Coffee (4) - ₹396"
-    // "🍕 1x Margherita Pizza : ₹250"
-    // "2x Cheese Maggi @ ₹79 = ₹158"
-    const match = line.match(
-      /^(?:[-*•🍕🍔🥤🥪🍟🍗\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX]\s+)?([A-Za-z0-9\s()&'\/]+?)(?:\s*\((\d+)\))?\s*[@:\-–=]+\s*₹?\s*(\d+(?:\.\d+)?)(?:\s*[@=]\s*₹?\s*(\d+(?:\.\d+)?))?/u,
+    // 2. Pattern 1: Single-line item with price
+    // "🍕 1 x Chicken Pizza (7-inch) - ₹149" or "- 2x Veg Burger: ₹240" or "Cold Coffee (2) @ ₹99 = ₹198"
+    const singleMatch = line.match(
+      /^(?:[-*•🍕🍔🥤☕🥪🍟🍗\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX]\s+)?([A-Za-z0-9\s()&'\/\[\]\-]+?)(?:\s*\((\d+)\))?\s*[@:\-–=]+\s*₹?\s*(\d+(?:\.\d+)?)(?:\s*[@=xX]\s*₹?\s*(\d+(?:\.\d+)?))?$/u,
     )
-
-    if (match) {
-      let rawName = match[2] ? match[2].trim() : ''
-      rawName = rawName.replace(/^[*_#•\-–\s]+|[*_#\s]+$/g, '').trim()
-
+    if (singleMatch && singleMatch[4]) {
+      const rawName = (singleMatch[2] || '').replace(/^[*_#•\-–\s]+|[*_#\s]+$/g, '').trim()
       if (
-        !rawName ||
-        /^(?:total|subtotal|bill|amount|order\s*summary|here\s*is|please\s*choose)$/i.test(rawName)
+        rawName &&
+        !/^(?:total|subtotal|bill|amount|order\s*summary|estimated|delivery)$/i.test(rawName)
       ) {
+        let quantity = 1
+        if (singleMatch[1]) quantity = parseInt(singleMatch[1], 10) || 1
+        else if (singleMatch[3]) quantity = parseInt(singleMatch[3], 10) || 1
+
+        const priceVal1 = parseFloat(singleMatch[4]) || 0
+        const priceVal2 = singleMatch[5] ? parseFloat(singleMatch[5]) : 0
+        const totalPrice = priceVal2 > 0 ? priceVal2 : priceVal1
+        const unitPrice = quantity > 0 ? Math.round((totalPrice / quantity) * 100) / 100 : totalPrice
+
+        items.push({ name: rawName, quantity, unit_price: unitPrice, total_price: totalPrice })
         continue
       }
+    }
 
-      let quantity = 1
-      if (match[1]) {
-        quantity = parseInt(match[1], 10) || 1
-      } else if (match[3]) {
-        quantity = parseInt(match[3], 10) || 1
-      }
+    // 3. Pattern 2: Two-line format
+    // Line i: "🍕 1 x Chicken Pizza (7-inch)"
+    // Line i+1: "₹149 x 1 = ₹149" or "₹149" or "@ ₹149 = ₹149"
+    const itemHeaderMatch = line.match(
+      /^(?:[-*•🍕🍔🥤☕🥪🍟🍗\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX]\s+)?([A-Za-z0-9\s()&'\/\[\]\-]+?)(?:\s*\((\d+)\))?$/u,
+    )
+    if (itemHeaderMatch && i + 1 < lines.length) {
+      const rawName = (itemHeaderMatch[2] || '').replace(/^[*_#•\-–\s]+|[*_#\s]+$/g, '').trim()
+      const nextLine = lines[i + 1]
+      const priceCalcMatch = nextLine.match(
+        /^₹?\s*(\d+(?:\.\d+)?)\s*(?:[xX*@]\s*(\d+))?\s*(?:=\s*₹?\s*(\d+(?:\.\d+)?))?$/,
+      )
 
-      let totalPrice = 0
-      let unitPrice = 0
+      if (
+        rawName &&
+        rawName.length >= 3 &&
+        priceCalcMatch &&
+        !/^(?:total|subtotal|bill|amount|estimated|delivery)$/i.test(rawName)
+      ) {
+        let quantity = 1
+        if (itemHeaderMatch[1]) quantity = parseInt(itemHeaderMatch[1], 10) || 1
+        else if (itemHeaderMatch[3]) quantity = parseInt(itemHeaderMatch[3], 10) || 1
+        else if (priceCalcMatch[2]) quantity = parseInt(priceCalcMatch[2], 10) || 1
 
-      const priceVal1 = parseFloat(match[4]) || 0
-      const priceVal2 = match[5] ? parseFloat(match[5]) : 0
+        const unitPrice = parseFloat(priceCalcMatch[1]) || 0
+        const totalPrice = priceCalcMatch[3] ? parseFloat(priceCalcMatch[3]) : unitPrice * quantity
 
-      if (priceVal2 > 0) {
-        unitPrice = priceVal1
-        totalPrice = priceVal2
-      } else {
-        totalPrice = priceVal1
-        unitPrice = quantity > 0 ? Math.round((totalPrice / quantity) * 100) / 100 : totalPrice
-      }
-
-      if (totalPrice > 0 && rawName.length >= 3) {
-        items.push({
-          name: rawName,
-          quantity,
-          unit_price: unitPrice,
-          total_price: totalPrice,
-        })
+        items.push({ name: rawName, quantity, unit_price: unitPrice, total_price: totalPrice })
+        i++ // consume nextLine as price
+        continue
       }
     }
   }
@@ -360,14 +368,14 @@ export async function handleRestaurantTrialInbound(
   // CASE 2: No active order yet — Check for final order confirmation
   // ==========================================================
   if (isOrderConfirmationPhrase(inboundText)) {
-    // Look up recent bot messages to extract item summary
+    // Look up recent outbound messages (bot or AI agent) to extract item summary
     const { data: recentMsgs } = await db
       .from('messages')
       .select('content_text')
       .eq('conversation_id', conversationId)
-      .eq('sender_type', 'bot')
+      .neq('sender_type', 'customer')
       .order('created_at', { ascending: false })
-      .limit(5)
+      .limit(10)
 
     let parsedSummary: { items: TrialOrderItem[]; subtotal: number } | null = null
 
@@ -378,10 +386,17 @@ export async function handleRestaurantTrialInbound(
       }
     }
 
-    // Bug 3 Fix: If no summary was matched, request clarification instead of creating dummy Veg Burger!
     if (!parsedSummary || parsedSummary.items.length === 0) {
-      // Only consume the message if it looked like an order confirmation attempt
-      if (textLower === '1' && (!recentMsgs || recentMsgs.length === 0)) {
+      // Check if recent outbound messages actually attempted to present an order summary
+      const hadSummaryAttempt = (recentMsgs ?? []).some((m) =>
+        /(?:order\s*summary|food\s*subtotal|estimated\s*total|what'?s\s*next|confirm\s*details)/i.test(
+          m.content_text || '',
+        ),
+      )
+
+      // If no summary attempt was found, this message was just a general conversation word ("yes", "ok", etc.)
+      // Return handled: false so the normal conversational AI / flow handles it
+      if (!hadSummaryAttempt) {
         return { handled: false }
       }
 

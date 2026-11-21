@@ -113,6 +113,11 @@ export function PendingKitchenOrdersCard() {
   }
 
   const pendingKitchenOrders = orders.filter((o) => o.status === 'pending_kitchen')
+  const inProgressOrders = orders.filter(
+    (o) =>
+      o.status === 'fulfilment_pending' ||
+      (o.status === 'payment_pending' && o.payment_status !== 'awaiting_verification'),
+  )
   const awaitingPaymentOrders = orders.filter(
     (o) => o.payment_method === 'upi' && o.payment_status === 'awaiting_verification',
   )
@@ -229,6 +234,66 @@ export function PendingKitchenOrdersCard() {
             </div>
           )}
         </div>
+
+        {/* SECTION 1.5: IN-PROGRESS CUSTOMER CHECKOUT (Delivery / Payment Selection) */}
+        {inProgressOrders.length > 0 && (
+          <div className="space-y-3 border-t border-border pt-4">
+            <h4 className="flex items-center gap-2 text-sm font-semibold tracking-wide text-foreground uppercase">
+              <RefreshCw className="h-4 w-4 text-sky-500" />
+              In-Progress Customer Checkout ({inProgressOrders.length})
+            </h4>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {inProgressOrders.map((order) => (
+                <div
+                  key={order.id}
+                  className="flex flex-col justify-between rounded-lg border border-sky-500/30 bg-sky-500/5 p-4 space-y-3"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-sm font-bold text-foreground">
+                        {order.order_number}
+                      </span>
+                      <Badge variant="outline" className="border-sky-500 text-sky-600 dark:text-sky-400">
+                        {order.status === 'fulfilment_pending'
+                          ? 'Choosing Delivery / Takeaway'
+                          : 'Selecting Payment Method'}
+                      </Badge>
+                    </div>
+
+                    <div className="text-xs text-muted-foreground">
+                      Accepted: {order.kitchen_decision_at ? new Date(order.kitchen_decision_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently'}
+                    </div>
+
+                    <div className="rounded border border-border/60 bg-background/50 p-2.5">
+                      <ul className="space-y-1 text-xs">
+                        {order.items.map((item, idx) => (
+                          <li key={idx} className="flex justify-between text-muted-foreground">
+                            <span>
+                              {item.quantity}x {item.name}
+                            </span>
+                            <span className="font-medium text-foreground">
+                              {formatInr(item.total_price)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-2 flex justify-between border-t border-border/40 pt-1.5 text-xs font-bold text-foreground">
+                        <span>Total Amount</span>
+                        <span>{formatInr(order.total_amount)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded border border-sky-500/20 bg-sky-500/10 p-2 text-xs text-sky-700 dark:text-sky-300">
+                    Customer is interacting with WhatsApp bot to finalize{' '}
+                    {order.status === 'fulfilment_pending' ? 'delivery details' : 'payment'}.
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* SECTION 2: AWAITING PAYMENT VERIFICATION (UPI) */}
         {awaitingPaymentOrders.length > 0 && (
