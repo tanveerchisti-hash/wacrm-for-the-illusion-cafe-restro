@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { engineSendText, engineSendInteractiveButtons } from '@/lib/flows/meta-send'
+import { engineSendText, engineSendInteractiveButtons, engineSendMedia } from '@/lib/flows/meta-send'
 
 export type TrialOrderStatus =
   | 'pending_kitchen'
@@ -85,7 +85,7 @@ export const DEFAULT_TRIAL_SETTINGS: Omit<RestaurantTrialSettings, 'accountId'> 
   restaurantAddress: 'The Illusion Cafe & Restaurant, Main Market / Station Road',
   pickupInstructions: 'Please collect your order at the counter when notified.',
   deliveryFee: 20.0,
-  testUpiId: 'test-illusioncafe@upi',
+  testUpiId: '9352326442-8@ybl',
   testQrCodeUrl: null,
   defaultPrepMinutes: 15,
   itemPrepDurations: {
@@ -551,6 +551,29 @@ export async function processPaymentMethod(
 
   if (error || !order) throw new Error('Order not found')
 
+  // Validation: Order must be in payment_pending status and accepted by kitchen
+  if (order.status === 'pending_kitchen') {
+    throw new Error('Order is awaiting kitchen confirmation before payment can be selected')
+  }
+  if (order.status === 'kitchen_rejected') {
+    throw new Error('Cannot process payment for a rejected order')
+  }
+  if (order.payment_status === 'verified') {
+    throw new Error('Payment is already verified for this order')
+  }
+
+  // Prevent duplicate QR and payment messages from webhook retries or repeated customer button taps
+  if (
+    paymentMethod === 'upi' &&
+    order.payment_status === 'awaiting_verification' &&
+    order.payment_method === 'upi'
+  ) {
+    const duplicateNotice =
+      `📱 Your payment for order *#${order.order_number}* is already *awaiting staff verification*.\n\n` +
+      `Our staff will confirm receipt shortly, and your preparation timer will begin immediately upon confirmation.`
+    return { order: order as TrialOrder, messageText: duplicateNotice }
+  }
+
   const settings = await getRestaurantTrialSettings(db, accountId)
   const nowIso = new Date().toISOString()
 
@@ -608,12 +631,54 @@ export async function processPaymentMethod(
 
     if (updateError || !updated) throw new Error(updateError?.message)
 
-    const messageText =
-      `📱 *UPI / Online Payment Details (TEST TRIAL)*\n\n` +
-      `• UPI ID: \`${settings.testUpiId}\`\n` +
-      `• Total Amount: *₹${order.total_amount}*\n\n` +
-      `⚠️ *Verification Step:* Once paid, our restaurant staff will verify your payment in the system.\n` +
-      `Your order preparation timer will start immediately upon staff confirmation. Please allow 1–2 minutes for verification.`
+    const upiId = settings.testUpiId || '9352326442-8@ybl'
+    const qrUrl = settings.testQrCodeUrl
+
+    // 1. Deliver QR image via WhatsApp media if configured
+    let mediaSent = false
+    if (qrUrl && order.conversation_id && order.contact_id && configOwnerUserId) {
+      try {
+        await engineSendMedia({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId: order.conversation_id,
+          contactId: order.contact_id,
+          kind: 'image',
+          link: qrUrl,
+          caption: `PhonePe QR - ${settings.restaurantName}`,
+        })
+        mediaSent = true
+      } catch (mediaErr) {
+        console.error(
+          '[order-trial] Failed to deliver PhonePe QR code media:',
+          mediaErr instanceof Error ? mediaErr.message : String(mediaErr),
+        )
+      }
+    }
+
+    const payableAmount = order.total_amount ?? order.subtotal ?? 0
+
+    // 2. Format payment instructions
+    const messageText = mediaSent
+      ? `📱 *UPI / Online Payment*\n\n` +
+        `💳 *UPI ID:* ${upiId}\n\n` +
+        `💰 *Amount Payable: ₹${payableAmount}*\n\n` +
+        `📸 Scan the QR code above or use the UPI ID to pay.\n\n` +
+        `✅ After completing payment, reply *Paid*.\n\n` +
+        `⏳ Our restaurant staff will manually verify payment before preparation begins.`
+      : qrUrl
+        ? `📱 *UPI / Online Payment*\n\n` +
+          `💳 *UPI ID:* ${upiId}\n\n` +
+          `💰 *Amount Payable: ₹${payableAmount}*\n\n` +
+          `⚠️ *Notice:* We could not deliver the QR code image at this moment. Please use the UPI ID above to complete your payment, or request our staff for assistance.\n\n` +
+          `✅ After completing payment, reply *Paid*.\n\n` +
+          `⏳ Our restaurant staff will manually verify payment before preparation begins.`
+        : `📱 *UPI / Online Payment*\n\n` +
+          `💳 *UPI ID:* ${upiId}\n\n` +
+          `💰 *Amount Payable: ₹${payableAmount}*\n\n` +
+          `📲 Please use the UPI ID above to complete your payment.\n\n` +
+          `✅ After completing payment, reply *Paid*.\n\n` +
+          `⏳ Our restaurant staff will manually verify payment before preparation begins.`
 
     if (order.conversation_id && order.contact_id && configOwnerUserId) {
       await engineSendText({
