@@ -27,6 +27,7 @@
     "broadcasts": "Broadcasts",
     "automations": "Automations",
     "flows": "Flows",
+    "backendFlows": "Backend Flows",
     "aiAgents": "AI Agents",
     "settings": "Settings",
     "beta": "Beta",

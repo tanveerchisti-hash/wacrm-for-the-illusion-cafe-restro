@@ -11,6 +11,7 @@ import {
   Bell,
   Bot,
   Crown,
+  Cpu,
   GitBranch,
   LayoutDashboard,
   LogOut,
@@ -98,6 +99,7 @@ const navItems: NavItem[] = [
   { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
   { href: "/automations", labelKey: "automations", icon: Zap },
   { href: "/flows", labelKey: "flows", icon: Workflow, beta: true },
+  { href: "/backend-flows", labelKey: "backendFlows", icon: Cpu },
   { href: "/agents", labelKey: "aiAgents", icon: Bot },
 ];
 

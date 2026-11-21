@@ -44,34 +44,86 @@ export interface TrialInboundArgs {
  * Check if the inbound customer message signifies final order confirmation.
  * Handles option "1" from summary menus, standard English phrases, and Hinglish variants.
  */
+
 export function isOrderConfirmationPhrase(text: string): boolean {
-  const trimmed = text.trim().toLowerCase()
+  const normalized = text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\u200b-\u200d\uFEFF]/g, '')
+    .replace(/[.,!।]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b(?:kardo|krdo|kr do)\b/g, 'kar do')
+    .replace(/\bkar\s+di\s+jiye\b/g, 'kar dijiye')
+    .replace(/\b(?:banado|bnado)\b/g, 'bana do')
+    .replace(/\bbhejdo\b/g, 'bhej do')
+    .replace(/\blagado\b/g, 'laga do')
+    .replace(/\b(?:thik|thek)\b/g, 'theek')
 
-  // 1. Option 1 from summary menus: "1", "1.", "1. confirm details", "1 confirm", "1 details"
-  if (/^1(?:[.)\s\-:]*(?:confirm(?:\s+details|\s+order)?|yes|ha|haan)?)?$/i.test(trimmed)) {
-    return true
+  // Never interpret questions, cancellations or cart edits as confirmation.
+  if (
+    !normalized ||
+    /[?？]/.test(text) ||
+    /\b(?:no|not|don't|dont|never|mat|nahi|nahin|cancel|reject|stop|ruk|ruko|remove|hata|delete|add|change|badal|edit|wait)\b/.test(normalized)
+  ) {
+    return false
   }
 
-  // 2. Exact English confirmation phrases (anchored to entire message to avoid matching item lists)
+  // Option 1 and its variations.
   if (
-    /^(?:yes|ha|haan|ji\s+ha|ok|okay)?[\s,.]*(?:confirm(?:\s+(?:the\s+)?(?:order|details|this|it))?|place\s+order|proceed(?:\s+with\s+order)?)$/i.test(trimmed)
+    /^1(?:\s*(?:confirm(?:\s+(?:details|order))?|details|yes|haan))?$/.test(normalized)
   ) {
     return true
   }
 
-  // 3. Exact Hinglish confirmation phrases
+  // Short positive replies. The caller must verify an active draft cart.
   if (
-    /^(?:order\s*)?confirm\s*(?:kardo|kar\s*do|karo|kijiye)$/i.test(trimmed) ||
-    /^(?:ha|haan|ji\s+ha)?[\s,.]*(?:confirm(?:\s*(?:kardo|kar\s*do|karo|kijiye))?)$/i.test(trimmed) ||
-    /^kardo\s*confirm$/i.test(trimmed) ||
-    /^(?:order\s*)?kr\s*de\s*yahi$/i.test(trimmed) ||
-    /^order\s*(?:kardo|kar\s*do|karo|kijiye)$/i.test(trimmed)
+    /^(?:haanji|hanji|haan ji|han ji|haan|han|ha|ji|yes|ok|okay|sure|bilkul)(?:\s+(?:ji|please))?$/.test(normalized)
   ) {
     return true
   }
 
-  return false
+  // Remove optional polite prefixes.
+  const intent = normalized
+    .replace(
+      /^(?:(?:haanji|hanji|haan ji|han ji|haan|han|ha|ji|yes|yeah|yup|ok|okay|sure|bilkul|please|plz|bhai|ab)\s+)+/,
+      ''
+    )
+    .trim()
+
+  const confirmationPatterns: RegExp[] = [
+    // Confirm, confirm order, confirm kar do, confirm kar dijiye.
+    /^(?:i\s+|order\s+)?confirm(?:ed)?(?:\s+(?:this|it|details|(?:the\s+)?order))?(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|kr de|kar de|please))?$/,
+
+    // Kar do confirm, kardo confirm, kar dijiye confirm.
+    /^(?:kar do|kar dijiye|kr de)\s+confirm(?:ed)?$/,
+
+    // Done, final, pakka, done kar do, order final kar do.
+    /^(?:(?:ye|mera|is|iss|this)\s+)?(?:order\s+)?(?:done|final|pakka)(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|hai))?$/,
+
+    // Bana do, bhej do, order laga do, order place kar do.
+    /^(?:(?:ye|mera|is|iss|this)\s+)?(?:order\s+)?(?:bana|banwa|bna|bhej|laga|ready|taiyar|tayyar|place|send)(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|do|de do|dijiye|kar de))$/,
+
+    // Theek hai, theek kar do, sahi hai, haan theek hai bana do.
+    /^(?:theek|sahi)(?:\s+hai)?(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|bana do|bhej do|order kar do))?$/,
+
+    // Kar do, kardo, kar dijiye, order kar do.
+    /^(?:order\s+)?(?:kar do|kar dijiye|karwa do|karo|kijiye|kr de|kar de|do it)$/,
+
+    // Order kr de yahi.
+    /^(?:order\s+)?kr\s+de\s+yahi$/,
+
+    // Bana ke bhej do.
+    /^(?:order\s+)?bana\s+ke\s+bhej\s+(?:do|dijiye)$/,
+
+    // English confirmation commands.
+    /^(?:place\s+(?:the\s+)?order|send\s+(?:the\s+)?order|send\s+it|go\s+ahead|proceed(?:\s+with\s+(?:the\s+)?order)?)$/,
+  ]
+
+  return confirmationPatterns.some((pattern) => pattern.test(intent))
 }
+
+
 
 /**
  * Parses itemized lines and total from a recent bot order summary message.
