@@ -9,11 +9,21 @@ import {
 import { engineSendText } from '@/lib/flows/meta-send'
 import {
   parseCustomerOrder,
-  modifyOrderCart,
   isRemoveItemRequest,
-  type ParsedOrderItem,
 } from './order-parser'
 import { findCatalogItem } from './menu-catalog'
+import {
+  getActiveDraftCart,
+  saveDraftCart,
+  createDraftCartFromParsedItems,
+  mergeItemsIntoDraftCart,
+  removeItemFromDraftCart,
+  markDraftCartConfirmed,
+  cancelDraftCart,
+  formatDraftCartSummary,
+  convertDraftCartToTrialOrderItems,
+  type DraftCart,
+} from './draft-cart'
 
 export interface TrialInboundArgs {
   db: SupabaseClient
@@ -42,14 +52,20 @@ export function isOrderConfirmationPhrase(text: string): boolean {
     return true
   }
 
-  // 2. Explicit confirmation phrases in English, Hindi, or Hinglish:
-  // e.g. "confirm", "yes confirm", "yes confirm this", "confirm this", "confirm it", "please confirm",
-  // "order confirm kardo", "order kr de yahi", "ha confirm", "place order", "proceed"
+  // 2. Exact English confirmation phrases (anchored to entire message to avoid matching item lists)
   if (
-    /\bconfirm\b/i.test(trimmed) ||
-    /^(?:yes|ha|haan|ji\s+ha|ok|okay)[,.\s]*(?:confirm|kardo|kar\s*do|kijiye|karo|proceed|place\s*order)?$/i.test(trimmed) ||
-    /^(?:order\s*(?:kr\s*de|kardo|kar\s*do|karo|place|confirm|lagado|laga\s*do))/i.test(trimmed) ||
-    /^(?:place\s*order|proceed\s*with\s*order|proceed)$/i.test(trimmed)
+    /^(?:yes|ha|haan|ji\s+ha|ok|okay)?[\s,.]*(?:confirm(?:\s+(?:the\s+)?(?:order|details|this|it))?|place\s+order|proceed(?:\s+with\s+order)?)$/i.test(trimmed)
+  ) {
+    return true
+  }
+
+  // 3. Exact Hinglish confirmation phrases
+  if (
+    /^(?:order\s*)?confirm\s*(?:kardo|kar\s*do|karo|kijiye)$/i.test(trimmed) ||
+    /^(?:ha|haan|ji\s+ha)?[\s,.]*(?:confirm(?:\s*(?:kardo|kar\s*do|karo|kijiye))?)$/i.test(trimmed) ||
+    /^kardo\s*confirm$/i.test(trimmed) ||
+    /^(?:order\s*)?kr\s*de\s*yahi$/i.test(trimmed) ||
+    /^order\s*(?:kardo|kar\s*do|karo|kijiye)$/i.test(trimmed)
   ) {
     return true
   }
@@ -207,6 +223,21 @@ export async function handleRestaurantTrialInbound(
     // Stage 1 Gate: Order is awaiting kitchen confirmation
     // Do NOT let AI proceed to delivery or payment while kitchen approval is pending
     if (activeOrder.status === 'pending_kitchen') {
+      // Idempotent confirmation replay protection: if customer sends "1" or confirm again, do not re-order
+      if (isOrderConfirmationPhrase(inboundText)) {
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text:
+            `⏳ Your Order *#${activeOrder.order_number}* is already received and awaiting kitchen confirmation.\n\n` +
+            `We will notify you here as soon as our kitchen confirms your order!`,
+        }).catch((err) => console.error('[order-trial] duplicate confirm notification error:', err))
+
+        return { handled: true }
+      }
+
       const reminder =
         `⏳ Your order *#${activeOrder.order_number}* is currently awaiting kitchen confirmation ` +
         `(target response: 2–3 minutes). Please wait while our kitchen reviews your order — we will update you shortly!`
@@ -372,7 +403,7 @@ export async function handleRestaurantTrialInbound(
   }
 
   // ==========================================================
-  // CASE 2: No active order yet — Check options, confirmation & orders
+  // CASE 2: No active order yet — Check options, cart & confirmation
   // ==========================================================
 
   // Option 4: Cancel Enquiry
@@ -381,8 +412,10 @@ export async function handleRestaurantTrialInbound(
     textLower === '4.' ||
     textLower === '4. cancel enquiry' ||
     textLower === '4 cancel' ||
-    textLower === 'cancel enquiry'
+    textLower === 'cancel enquiry' ||
+    textLower === 'cancel order'
   ) {
+    await cancelDraftCart(db, accountId, contactId)
     await engineSendText({
       accountId,
       userId: configOwnerUserId,
@@ -430,67 +463,146 @@ export async function handleRestaurantTrialInbound(
     return { handled: true }
   }
 
-  // Option 1: Final Order Confirmation ("1", "Confirm Details", "Yes confirm this", "Order kr de yahi")
-  if (isOrderConfirmationPhrase(inboundText)) {
-    // Look up recent outbound messages (bot or AI agent) to extract item summary
-    const { data: recentMsgs } = await db
-      .from('messages')
-      .select('content_text')
-      .eq('conversation_id', conversationId)
-      .neq('sender_type', 'customer')
-      .order('created_at', { ascending: false })
-      .limit(10)
+  // STEP 2A: Cart Removal Request (e.g. "cold coffee remove kardo", "pizza hata do")
+  const isRemove = isRemoveItemRequest(inboundText)
+  if (isRemove) {
+    const existingCart = await getActiveDraftCart(db, accountId, contactId)
+    if (existingCart && existingCart.items.length > 0) {
+      const rawText = inboundText
+        .replace(/\b(?:remove|hata\s*do|cancel|hatao|delete)\b/gi, '')
+        .replace(/\b(?:kardo|kar\s*do|se|from\s*cart|ko)\b/gi, '')
+        .trim()
 
-    let parsedSummary: { items: TrialOrderItem[]; subtotal: number } | null = null
+      const itemToRemove = findCatalogItem(rawText)
+      if (itemToRemove) {
+        const updatedCart = removeItemFromDraftCart(existingCart, itemToRemove)
+        if (updatedCart.items.length === 0) {
+          await cancelDraftCart(db, accountId, contactId)
+          await engineSendText({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            text: `🗑️ *Cart Updated*\n\nYour cart is now empty. Please reply with the items you'd like to order, or send 'menu' to view our menu.`,
+          }).catch((err) => console.error('[order-trial] empty cart send error:', err))
+          return { handled: true }
+        }
 
-    for (const msg of recentMsgs ?? []) {
-      if (msg.content_text) {
-        parsedSummary = parseSummaryFromText(msg.content_text)
-        if (parsedSummary && parsedSummary.items.length > 0) break
+        const savedCart = await saveDraftCart(db, updatedCart)
+        const summaryText = formatDraftCartSummary(savedCart)
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: summaryText,
+        }).catch((err) => console.error('[order-trial] cart modify send error:', err))
+
+        return { handled: true }
       }
     }
+  }
 
-    if (!parsedSummary || parsedSummary.items.length === 0) {
-      // Check if recent outbound messages actually attempted to present an order summary
-      const hadSummaryAttempt = (recentMsgs ?? []).some((m) =>
-        /(?:order\s*summary|food\s*subtotal|estimated\s*total|what'?s\s*next|confirm\s*details)/i.test(
-          m.content_text || '',
-        ),
-      )
+  // STEP 2B: Check for NEW or MODIFIED Food Items in the inbound message!
+  // If customer provides items together with "confirm kar do" (e.g. Test C:
+  // "Chicken malai box 2 aur malai kabab 2, 4 cold coffee, malai chicken pizza 2 ye order confirm kar do"),
+  // process the items first, save to draft cart, and display summary for explicit confirmation.
+  const orderResult = parseCustomerOrder(inboundText)
+  if (orderResult && orderResult.items.length > 0) {
+    // Check if customer is explicitly adding items to an existing draft cart
+    const isExplicitAdd = /\b(?:aur\b|add\b|bhi\b)/i.test(inboundText)
+    const existingCart = await getActiveDraftCart(db, accountId, contactId)
 
-      // If no summary attempt was found, this message was just a general conversation word ("yes", "ok", etc.)
-      // Return handled: false so the normal conversational AI / flow handles it
-      if (!hadSummaryAttempt) {
-        return { handled: false }
+    let updatedCart: DraftCart
+
+    if (existingCart && isExplicitAdd) {
+      updatedCart = mergeItemsIntoDraftCart(existingCart, orderResult.items)
+    } else {
+      let activeSessionId: string | null = null
+      try {
+        const { data: activeSession } = await db
+          .from('ordering_sessions')
+          .select('id')
+          .eq('account_id', accountId)
+          .eq('contact_id', contactId)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle()
+
+        if (activeSession?.id) {
+          activeSessionId = activeSession.id
+        }
+      } catch {
+        // Table or lookup error: ignore and continue
       }
 
+      updatedCart = createDraftCartFromParsedItems({
+        accountId,
+        contactId,
+        conversationId,
+        orderingSessionId: activeSessionId,
+        parsedItems: orderResult.items,
+      })
+    }
+
+    // Persist draft cart (database + in-memory store)
+    const savedCart = await saveDraftCart(db, updatedCart)
+
+    // Generate WhatsApp order summary strictly from the saved structured draft cart
+    const summaryText = formatDraftCartSummary(savedCart)
+
+    await engineSendText({
+      accountId,
+      userId: configOwnerUserId,
+      conversationId,
+      contactId,
+      text: summaryText,
+    }).catch((err) => console.error('[order-trial] order summary send error:', err))
+
+    return { handled: true }
+  }
+
+  // STEP 2C: Final Order Confirmation ("1", "Confirm Details", "Yes confirm this", "Order confirm kardo")
+  if (isOrderConfirmationPhrase(inboundText)) {
+    // Retrieve the saved structured draft cart as the single source of truth
+    const draftCart = await getActiveDraftCart(db, accountId, contactId)
+
+    if (!draftCart || !draftCart.items || draftCart.items.length === 0) {
+      // If no draft exists, politely explain that no saved cart was found.
+      // Do not attempt to parse old chat messages.
       await engineSendText({
         accountId,
         userId: configOwnerUserId,
         conversationId,
         contactId,
         text:
-          `We couldn't confirm the exact items for your order. ` +
+          `🛒 *No active order found.*\n\n` +
           `Please reply with the items and quantities you'd like to order (e.g. "1 Chicken Pizza and 2 Cold Coffee"), ` +
           `or send 'menu' to view our menu.`,
-      }).catch((err) => console.error('[order-trial] clarification send error:', err))
+      }).catch((err) => console.error('[order-trial] no draft cart send error:', err))
 
       return { handled: true }
     }
 
-    const { items, subtotal } = parsedSummary
+    const trialItems = convertDraftCartToTrialOrderItems(draftCart)
+    const subtotal = draftCart.subtotal
 
+    // Idempotent creation: createTrialOrder checks if an order in pending_kitchen already exists
     const newOrder = await createTrialOrder(db, {
       accountId,
       contactId,
       conversationId,
-      items,
+      orderingSessionId: draftCart.orderingSessionId,
+      items: trialItems,
       subtotal,
     })
 
+    // Mark draft cart as confirmed so it cannot be re-confirmed
+    await markDraftCartConfirmed(db, accountId, contactId)
+
     const confirmationMsg =
       `📋 *Order #${newOrder.order_number} Received!*\n\n` +
-      `Items:\n${items.map((i) => `• ${i.quantity}x ${i.name} - ₹${i.total_price}`).join('\n')}\n` +
+      `Items:\n${trialItems.map((i) => `• ${i.quantity}x ${i.name} - ₹${i.total_price}`).join('\n')}\n` +
       `*Total: ₹${subtotal}*\n\n` +
       `⏳ Your order is now *awaiting kitchen confirmation* (target response: 2–3 minutes).\n` +
       `We will notify you here as soon as our kitchen confirms your order!`
@@ -502,74 +614,6 @@ export async function handleRestaurantTrialInbound(
       contactId,
       text: confirmationMsg,
     }).catch((err) => console.error('[order-trial] order received send error:', err))
-
-    return { handled: true }
-  }
-
-  // Cart Modification: Check if customer is asking to modify existing cart (add/remove)
-  const isRemove = isRemoveItemRequest(inboundText)
-  const isAdd = /\b(?:aur\b|add\b|bhi\b)/i.test(inboundText)
-
-  if (isRemove || isAdd) {
-    const { data: recentMsgs } = await db
-      .from('messages')
-      .select('content_text')
-      .eq('conversation_id', conversationId)
-      .neq('sender_type', 'customer')
-      .order('created_at', { ascending: false })
-      .limit(5)
-
-    let previousParsed: { items: TrialOrderItem[]; subtotal: number } | null = null
-    for (const msg of recentMsgs ?? []) {
-      if (msg.content_text) {
-        previousParsed = parseSummaryFromText(msg.content_text)
-        if (previousParsed && previousParsed.items.length > 0) break
-      }
-    }
-
-    if (previousParsed && previousParsed.items.length > 0) {
-      const existingCart: ParsedOrderItem[] = []
-      for (const pi of previousParsed.items) {
-        const catItem = findCatalogItem(pi.name)
-        if (catItem) {
-          existingCart.push({
-            item: catItem,
-            quantity: pi.quantity,
-            unitPrice: pi.unit_price,
-            totalPrice: pi.total_price,
-          })
-        }
-      }
-
-      if (existingCart.length > 0) {
-        const modResult = modifyOrderCart(inboundText, existingCart)
-        if (modResult) {
-          await engineSendText({
-            accountId,
-            userId: configOwnerUserId,
-            conversationId,
-            contactId,
-            text: modResult.formattedSummary,
-          }).catch((err) => console.error('[order-trial] cart modify send error:', err))
-
-          return { handled: true }
-        }
-      }
-    }
-  }
-
-  // Deterministic Food Order Placement:
-  // e.g. "Chicken malai box 2 aur malai kabab 2, 4 cold coffee, malai chicken pizza 2 kardo"
-  // or "Ek chicken pizza aur 2 cold coffee"
-  const orderResult = parseCustomerOrder(inboundText)
-  if (orderResult && orderResult.items.length > 0) {
-    await engineSendText({
-      accountId,
-      userId: configOwnerUserId,
-      conversationId,
-      contactId,
-      text: orderResult.formattedSummary,
-    }).catch((err) => console.error('[order-trial] order summary send error:', err))
 
     return { handled: true }
   }

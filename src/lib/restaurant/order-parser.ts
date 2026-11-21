@@ -53,7 +53,7 @@ export interface OrderCartResult {
 function cleanFillerWords(text: string): string {
   return text
     .replace(
-      /\b(?:kardo|kar\s*do|karo|chahiye|mangwa\s*do|bhej\s*do|pack\s*kardo|pack\s*karo|add\s*kardo|add\s*kar\s*do|add|kr\s*do|krdo|de\s*do|dedo|lena\s*hai|karwaye|please|pls)\b/gi,
+      /\b(?:ye\s+order\s+confirm\s*(?:kar\s*do|kardo)?|order\s+confirm\s*(?:kar\s*do|kardo)?|confirm\s*(?:kar\s*do|kardo|karo|kijiye)?|ye\s+order|ye|yahi|bhi|hoga|kardo|kar\s*do|karo|chahiye|mangwa\s*do|bhej\s*do|pack\s*kardo|pack\s*karo|add\s*kardo|add\s*kar\s*do|add|kr\s*do|krdo|de\s*do|dedo|lena\s*hai|karwaye|please|pls)\b/gi,
       '',
     )
     .trim()
@@ -80,6 +80,11 @@ function parseQuantity(token: string): number | null {
 export function parseCustomerOrder(message: string): OrderCartResult | null {
   const text = message.trim()
   if (!text || text.length < 3) return null
+
+  // Cart removal requests should not be parsed as food additions
+  if (isRemoveItemRequest(text)) {
+    return null
+  }
 
   // Check if message is a general question / menu request rather than an order placement
   const hasQuestionMarker =
