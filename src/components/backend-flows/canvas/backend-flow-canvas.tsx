@@ -42,6 +42,7 @@ const NODE_TYPES = {
 interface BackendFlowCanvasProps {
   initialDefinition?: BackendFlowDefinition
   onChange: (definition: BackendFlowDefinition) => void
+  onSave?: (definition: BackendFlowDefinition) => Promise<void>
   onValidationChange?: (result: CanvasValidationResult) => void
   onOpenSimulator?: () => void
   disabled?: boolean
@@ -50,6 +51,7 @@ interface BackendFlowCanvasProps {
 function BackendFlowCanvasInner({
   initialDefinition,
   onChange,
+  onSave,
   onValidationChange,
   onOpenSimulator,
   disabled,
@@ -283,6 +285,37 @@ function BackendFlowCanvasInner({
     [edges, syncToParent]
   )
 
+  // Save Node Draft from Drawer and persist to backend
+  const handleNodeSave = useCallback(
+    async (updated: BackendFlowNode) => {
+      const nextNodes = nodes.map((n) =>
+        n.id === updated.id ? { ...n, data: updated.data } : n
+      )
+      setNodes(nextNodes)
+      setSelectedNode(updated)
+      syncToParent(nextNodes, edges)
+
+      if (onSave) {
+        const nextDef: BackendFlowDefinition = {
+          nodes: nextNodes.map((n) => ({
+            id: n.id,
+            type: n.type as 'trigger' | 'action' | 'condition',
+            position: n.position,
+            data: n.data,
+          })),
+          edges: edges.map((e) => ({
+            id: e.id,
+            source: e.source,
+            target: e.target,
+            label: (e.label as string) || undefined,
+          })),
+        }
+        await onSave(nextDef)
+      }
+    },
+    [nodes, edges, syncToParent, onSave]
+  )
+
   // Delete Node from Drawer or Canvas
   const handleNodeDelete = useCallback(
     (nodeId: string) => {
@@ -348,6 +381,7 @@ function BackendFlowCanvasInner({
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         onUpdate={handleNodeUpdate}
+        onSave={handleNodeSave}
         onDelete={handleNodeDelete}
       />
     </div>

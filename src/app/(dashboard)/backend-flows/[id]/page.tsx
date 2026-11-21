@@ -203,9 +203,9 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
     }
   }
 
-  const handleSave = async () => {
+  const handleSaveDefinition = async (customDefinition?: BackendFlowDefinition) => {
     let parsedTriggerConfig = {}
-    let parsedDefinition = canvasDefinition
+    let parsedDefinition = customDefinition || canvasDefinition
 
     try {
       parsedTriggerConfig = JSON.parse(triggerConfigStr)
@@ -214,7 +214,7 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
       return
     }
 
-    if (viewMode === 'json') {
+    if (viewMode === 'json' && !customDefinition) {
       try {
         parsedDefinition = JSON.parse(definitionStr)
       } catch {
@@ -248,12 +248,19 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
       if (!res.ok) throw new Error(data.error || 'Failed to save workflow')
 
       setFlow(data.flow)
+      setCanvasDefinition(parsedDefinition)
+      setDefinitionStr(JSON.stringify(parsedDefinition, null, 2))
       toast.success('Workflow draft saved successfully!')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Save failed')
+      throw err
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleSave = async () => {
+    await handleSaveDefinition()
   }
 
   const onOpenPublishDialog = () => {
@@ -695,6 +702,7 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
                     setCanvasDefinition(newDef)
                     setDefinitionStr(JSON.stringify(newDef, null, 2))
                   }}
+                  onSave={handleSaveDefinition}
                   onValidationChange={setCanvasValidation}
                   onOpenSimulator={() => setSimulatorOpen(true)}
                   disabled={!canEdit}
