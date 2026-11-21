@@ -7,6 +7,13 @@ import {
   type TrialOrderItem,
 } from './order-trial'
 import { engineSendText } from '@/lib/flows/meta-send'
+import {
+  parseCustomerOrder,
+  modifyOrderCart,
+  isRemoveItemRequest,
+  type ParsedOrderItem,
+} from './order-parser'
+import { findCatalogItem } from './menu-catalog'
 
 export interface TrialInboundArgs {
   db: SupabaseClient
@@ -365,8 +372,65 @@ export async function handleRestaurantTrialInbound(
   }
 
   // ==========================================================
-  // CASE 2: No active order yet — Check for final order confirmation
+  // CASE 2: No active order yet — Check options, confirmation & orders
   // ==========================================================
+
+  // Option 4: Cancel Enquiry
+  if (
+    textLower === '4' ||
+    textLower === '4.' ||
+    textLower === '4. cancel enquiry' ||
+    textLower === '4 cancel' ||
+    textLower === 'cancel enquiry'
+  ) {
+    await engineSendText({
+      accountId,
+      userId: configOwnerUserId,
+      conversationId,
+      contactId,
+      text: `❌ *Order Enquiry Cancelled*\n\nYour enquiry has been cancelled. Send 'menu' anytime when you're ready to explore or place an order!`,
+    }).catch((err) => console.error('[order-trial] cancel send error:', err))
+
+    return { handled: true }
+  }
+
+  // Option 2: Add More Items prompt
+  if (
+    textLower === '2' ||
+    textLower === '2.' ||
+    textLower === '2. add more items' ||
+    textLower === 'add more items'
+  ) {
+    await engineSendText({
+      accountId,
+      userId: configOwnerUserId,
+      conversationId,
+      contactId,
+      text: `📝 *Add Items to Order*\n\nPlease reply with the items you'd like to add (e.g. "1 Cold Coffee" or "2 Chicken Burger").`,
+    }).catch((err) => console.error('[order-trial] add more items prompt error:', err))
+
+    return { handled: true }
+  }
+
+  // Option 3: Remove an Item prompt
+  if (
+    textLower === '3' ||
+    textLower === '3.' ||
+    textLower === '3. remove an item' ||
+    textLower === 'remove an item'
+  ) {
+    await engineSendText({
+      accountId,
+      userId: configOwnerUserId,
+      conversationId,
+      contactId,
+      text: `🗑️ *Remove an Item*\n\nPlease reply with the item name you'd like to remove (e.g. "remove cold coffee" or "pizza hata do").`,
+    }).catch((err) => console.error('[order-trial] remove item prompt error:', err))
+
+    return { handled: true }
+  }
+
+  // Option 1: Final Order Confirmation ("1", "Confirm Details", "Yes confirm this", "Order kr de yahi")
   if (isOrderConfirmationPhrase(inboundText)) {
     // Look up recent outbound messages (bot or AI agent) to extract item summary
     const { data: recentMsgs } = await db
@@ -438,6 +502,74 @@ export async function handleRestaurantTrialInbound(
       contactId,
       text: confirmationMsg,
     }).catch((err) => console.error('[order-trial] order received send error:', err))
+
+    return { handled: true }
+  }
+
+  // Cart Modification: Check if customer is asking to modify existing cart (add/remove)
+  const isRemove = isRemoveItemRequest(inboundText)
+  const isAdd = /\b(?:aur\b|add\b|bhi\b)/i.test(inboundText)
+
+  if (isRemove || isAdd) {
+    const { data: recentMsgs } = await db
+      .from('messages')
+      .select('content_text')
+      .eq('conversation_id', conversationId)
+      .neq('sender_type', 'customer')
+      .order('created_at', { ascending: false })
+      .limit(5)
+
+    let previousParsed: { items: TrialOrderItem[]; subtotal: number } | null = null
+    for (const msg of recentMsgs ?? []) {
+      if (msg.content_text) {
+        previousParsed = parseSummaryFromText(msg.content_text)
+        if (previousParsed && previousParsed.items.length > 0) break
+      }
+    }
+
+    if (previousParsed && previousParsed.items.length > 0) {
+      const existingCart: ParsedOrderItem[] = []
+      for (const pi of previousParsed.items) {
+        const catItem = findCatalogItem(pi.name)
+        if (catItem) {
+          existingCart.push({
+            item: catItem,
+            quantity: pi.quantity,
+            unitPrice: pi.unit_price,
+            totalPrice: pi.total_price,
+          })
+        }
+      }
+
+      if (existingCart.length > 0) {
+        const modResult = modifyOrderCart(inboundText, existingCart)
+        if (modResult) {
+          await engineSendText({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            text: modResult.formattedSummary,
+          }).catch((err) => console.error('[order-trial] cart modify send error:', err))
+
+          return { handled: true }
+        }
+      }
+    }
+  }
+
+  // Deterministic Food Order Placement:
+  // e.g. "Chicken malai box 2 aur malai kabab 2, 4 cold coffee, malai chicken pizza 2 kardo"
+  // or "Ek chicken pizza aur 2 cold coffee"
+  const orderResult = parseCustomerOrder(inboundText)
+  if (orderResult && orderResult.items.length > 0) {
+    await engineSendText({
+      accountId,
+      userId: configOwnerUserId,
+      conversationId,
+      contactId,
+      text: orderResult.formattedSummary,
+    }).catch((err) => console.error('[order-trial] order summary send error:', err))
 
     return { handled: true }
   }

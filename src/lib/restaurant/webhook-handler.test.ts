@@ -434,4 +434,217 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
       )
     })
   })
+
+  describe('Deterministic Order Placement & Cart Actions', () => {
+    it('intercepts multi-item Hinglish food order and deterministically replies with accurate summary', async () => {
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            return createChainedMock(null)
+          }
+          if (table === 'messages') {
+            const query = createChainedMock()
+            query.limit = vi.fn().mockResolvedValue({ data: [], error: null })
+            return query
+          }
+          return createChainedMock(null)
+        }),
+      } as unknown as SupabaseClient
+
+      const inboundText = 'Chicken malai box 2 aur malai kabab 2, 4 cold coffee, malai chicken pizza 2 kardo'
+
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-order-1', type: 'text' },
+        inboundText,
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Food Subtotal: ₹1,330'),
+        }),
+      )
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Chicken Malai Box [4 Pc]'),
+        }),
+      )
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Malai Kabab [4pc]'),
+        }),
+      )
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Cold Coffee'),
+        }),
+      )
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Malai Chicken Pizza'),
+        }),
+      )
+    })
+
+    it('intercepts mandatory test 2: "Ek chicken pizza aur 2 cold coffee"', async () => {
+      const db = {
+        from: vi.fn(() => createChainedMock(null)),
+      } as unknown as SupabaseClient
+
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-order-2', type: 'text' },
+        inboundText: 'Ek chicken pizza aur 2 cold coffee',
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Food Subtotal: ₹347'),
+        }),
+      )
+    })
+
+    it('handles Option 2 (Add More Items)', async () => {
+      const db = {
+        from: vi.fn(() => createChainedMock(null)),
+      } as unknown as SupabaseClient
+
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-opt-2', type: 'text' },
+        inboundText: '2. Add More Items',
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Add Items to Order'),
+        }),
+      )
+    })
+
+    it('handles Option 3 (Remove an Item)', async () => {
+      const db = {
+        from: vi.fn(() => createChainedMock(null)),
+      } as unknown as SupabaseClient
+
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-opt-3', type: 'text' },
+        inboundText: '3',
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Remove an Item'),
+        }),
+      )
+    })
+
+    it('handles Option 4 (Cancel Enquiry)', async () => {
+      const db = {
+        from: vi.fn(() => createChainedMock(null)),
+      } as unknown as SupabaseClient
+
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-opt-4', type: 'text' },
+        inboundText: '4. Cancel Enquiry',
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Order Enquiry Cancelled'),
+        }),
+      )
+    })
+
+    it('modifies previous cart when removing an item', async () => {
+      const previousSummary =
+        `🍽️ ILLUSION CAFE & RESTAURANT\n\n` +
+        `📜 Your Order Summary\n\n` +
+        `🍕 1 x Chicken Pizza (7-inch)\n` +
+        `₹149 x 1 = ₹149\n\n` +
+        `☕ 2 x Cold Coffee (200 ml)\n` +
+        `₹99 x 2 = ₹198\n\n` +
+        `💰 Food Subtotal: ₹347\n` +
+        `🚚 Delivery Charge: FREE (₹300+)\n\n` +
+        `💳 Estimated Total: ₹347\n`
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            return createChainedMock(null)
+          }
+          if (table === 'messages') {
+            const query = createChainedMock()
+            query.limit = vi.fn().mockResolvedValue({
+              data: [{ content_text: previousSummary }],
+              error: null,
+            })
+            return query
+          }
+          return createChainedMock(null)
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-mod-1', type: 'text' },
+        inboundText: 'cold coffee remove kardo',
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Food Subtotal: ₹149'),
+        }),
+      )
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Chicken Pizza [7-inch]'),
+        }),
+      )
+    })
+  })
 })
