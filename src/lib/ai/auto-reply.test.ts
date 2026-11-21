@@ -287,6 +287,28 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
   })
 })
 
+describe('dispatchInboundToAiReply — trial provider failure', () => {
+  it('sends a safe retry message instead of leaving only the typing indicator', async () => {
+    vi.stubEnv('RESTAURANT_ORDER_TRIAL_ENABLED', 'true')
+    vi.stubEnv('RESTAURANT_TRIAL_ACCOUNT_IDS', 'acct-1')
+    vi.stubEnv('RESTAURANT_TRIAL_PHONE_NUMBER_IDS', 'pn-1')
+    try {
+      h.generateReply.mockRejectedValue(new Error('Provider timeout'))
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await dispatchInboundToAiReply({ ...ARGS, phoneNumberId: 'pn-1' })
+      expect(h.engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: 'conv-1',
+          text: expect.stringContaining('temporary issue processing your order'),
+        }),
+      )
+      errSpy.mockRestore()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+})
+
 describe('dispatchInboundToAiReply — typing indicator (#527)', () => {
   it('shows "typing…" on the inbound wamid before calling the LLM', async () => {
     await dispatchInboundToAiReply(ARGS)

@@ -293,6 +293,30 @@ export async function dispatchInboundToAiReply(
       conversationId,
       error: err instanceof Error ? err.message : String(err),
     })
+    // For an active *test-number* restaurant ordering conversation, a
+    // provider timeout must not leave the customer with only "typing...".
+    // Skip the fallback if a newer inbound has already superseded this one.
+    if (isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })) {
+      try {
+        const db = supabaseAdmin()
+        if (!inboundMessageId || !(await hasNewerInbound(db, conversationId, inboundMessageId))) {
+          await engineSendText({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            text: 'Sorry, there was a temporary issue processing your order. Please resend the items and quantities, and I will help you confirm them.',
+            aiGenerated: true,
+          })
+        }
+      } catch (fallbackErr) {
+        console.error('[ai auto-reply] failure notification could not be sent:', {
+          accountId,
+          conversationId,
+          error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+        })
+      }
+    }
   }
 }
 
