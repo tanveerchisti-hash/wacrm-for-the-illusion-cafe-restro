@@ -92,6 +92,8 @@ export function isOrderConfirmationPhrase(text: string): boolean {
     .trim()
 
   const confirmationPatterns: RegExp[] = [
+    // Confirm after action words: "kardo confirm", "kar do confirm"
+    /^(?:kar do|kar dijiye|karo|kijiye|kar de|kr de)\s+confirm$/,
     // Confirm, confirm order, confirm kar do, confirm kar dijiye.
     /^(?:i\s+|order\s+)?confirm(?:ed)?(?:\s+(?:this|it|details|(?:the\s+)?order))?(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|kr de|kar de|please))?$/,
 
