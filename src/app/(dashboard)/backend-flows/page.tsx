@@ -91,12 +91,15 @@ export default function BackendFlowsPage() {
 
       const url = `/api/backend-flows?${params.toString()}`
       const res = await fetch(url)
-      if (!res.ok) throw new Error('Failed to load backend workflows')
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null)
+        throw new Error(errorData?.error || 'Failed to load backend workflows')
+      }
       const data = await res.json()
       setFlows(data.flows || [])
     } catch (err) {
       console.error(err)
-      toast.error('Failed to load backend workflows')
+      toast.error(err instanceof Error ? err.message : 'Failed to load backend workflows')
     } finally {
       setLoading(false)
     }
