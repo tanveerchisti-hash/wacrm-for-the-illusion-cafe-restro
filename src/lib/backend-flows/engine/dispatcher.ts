@@ -98,8 +98,12 @@ export async function dispatchBackendFlowEvent(
 ): Promise<FlowExecutionState[]> {
   const supabase = options?.supabase || supabaseAdmin()
 
-  let query = supabase
-    .from('backend_flows')
+  const tableRef = supabase?.from?.('backend_flows')
+  if (!tableRef || typeof tableRef.select !== 'function') {
+    return []
+  }
+
+  let query = tableRef
     .select('*')
     .eq('account_id', event.accountId)
 

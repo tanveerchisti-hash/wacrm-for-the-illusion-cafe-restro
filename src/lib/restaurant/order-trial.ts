@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { engineSendText, engineSendInteractiveButtons, engineSendMedia } from '@/lib/flows/meta-send'
+import { dispatchRestaurantOrderFlowEvent } from './flow-integration'
 
 export type TrialOrderStatus =
   | 'pending_kitchen'
@@ -255,6 +256,15 @@ export async function createTrialOrder(
     console.error('[order-trial] item insertion failed:', itemError)
   }
 
+  void dispatchRestaurantOrderFlowEvent({
+    accountId,
+    contactId,
+    conversationId,
+    event: 'order.created',
+    order: order as TrialOrder,
+    supabase: db,
+  })
+
   return order as TrialOrder
 }
 
@@ -340,6 +350,16 @@ export async function acceptKitchenOrder(
     }
   }
 
+  void dispatchRestaurantOrderFlowEvent({
+    accountId,
+    contactId: order.contact_id,
+    conversationId: order.conversation_id,
+    event: 'order.kitchen_accepted',
+    order: updated as TrialOrder,
+    extraPayload: { kitchenDecisionBy: userId },
+    supabase: db,
+  })
+
   return updated as TrialOrder
 }
 
@@ -411,6 +431,19 @@ export async function rejectKitchenOrder(
       text: rejectionMessage,
     }).catch((err) => console.error('[order-trial] reject notification failed:', err))
   }
+
+  void dispatchRestaurantOrderFlowEvent({
+    accountId,
+    contactId: order.contact_id,
+    conversationId: order.conversation_id,
+    event: 'order.kitchen_rejected',
+    order: updated as TrialOrder,
+    extraPayload: {
+      kitchenDecisionBy: userId,
+      rejectionReason: reason || updated.kitchen_rejection_reason,
+    },
+    supabase: db,
+  })
 
   return updated as TrialOrder
 }
@@ -523,6 +556,21 @@ export async function updateOrderFulfilment(
     }
   }
 
+  void dispatchRestaurantOrderFlowEvent({
+    accountId,
+    contactId: order.contact_id,
+    conversationId: order.conversation_id,
+    event: 'order.fulfilment_updated',
+    order: updated as TrialOrder,
+    extraPayload: {
+      fulfilmentType,
+      deliveryAddress: address || null,
+      deliveryFee,
+      totalAmount,
+    },
+    supabase: db,
+  })
+
   return { order: updated as TrialOrder, messageText }
 }
 
@@ -614,6 +662,20 @@ export async function processPaymentMethod(
       }).catch((err) => console.error('[order-trial] cash confirmation send failed:', err))
     }
 
+    void dispatchRestaurantOrderFlowEvent({
+      accountId,
+      contactId: order.contact_id,
+      conversationId: order.conversation_id,
+      event: 'order.payment_selected',
+      order: updated as TrialOrder,
+      extraPayload: {
+        paymentMethod: 'cash',
+        paymentStatus: 'pending_collection',
+        totalAmount: order.total_amount,
+      },
+      supabase: db,
+    })
+
     return { order: updated as TrialOrder, messageText }
   } else {
     // UPI / Online: Awaiting manual staff verification
@@ -690,7 +752,21 @@ export async function processPaymentMethod(
       }).catch((err) => console.error('[order-trial] upi details send failed:', err))
     }
 
-    return { order: updated as TrialOrder, messageText }
+    void dispatchRestaurantOrderFlowEvent({
+      accountId,
+      contactId: order.contact_id,
+      conversationId: order.conversation_id,
+      event: 'order.payment_selected',
+      order: updated as TrialOrder,
+      extraPayload: {
+        paymentMethod: 'upi',
+        paymentStatus: 'awaiting_verification',
+        totalAmount: payableAmount,
+      },
+      supabase: db,
+    })
+
+  return { order: updated as TrialOrder, messageText }
   }
 }
 
@@ -762,6 +838,20 @@ export async function confirmUpiPayment(
     }).catch((err) => console.error('[order-trial] upi verification notification failed:', err))
   }
 
+  void dispatchRestaurantOrderFlowEvent({
+    accountId,
+    contactId: order.contact_id,
+    conversationId: order.conversation_id,
+    event: 'order.payment_verified',
+    order: updated as TrialOrder,
+    extraPayload: {
+      paymentConfirmedBy: userId,
+      paymentMethod: 'upi',
+      totalAmount: order.total_amount,
+    },
+    supabase: db,
+  })
+
   return updated as TrialOrder
 }
 
@@ -817,6 +907,21 @@ export async function startItemTimers(
     })
     .eq('id', orderId)
     .eq('account_id', accountId)
+
+  void dispatchRestaurantOrderFlowEvent({
+    accountId,
+    event: 'order.preparing',
+    order: {
+      id: orderId,
+      order_number: orderId,
+      status: 'preparing',
+    },
+    extraPayload: {
+      estimatedPrepMinutes: maxMinutes,
+      timers: updatedTimers,
+    },
+    supabase: db,
+  })
 
   return updatedTimers
 }

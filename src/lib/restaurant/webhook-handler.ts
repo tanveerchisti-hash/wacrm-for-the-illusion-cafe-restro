@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { dispatchRestaurantOrderFlowEvent } from './flow-integration'
 import {
   getActiveTrialOrder,
   updateOrderFulfilment,
@@ -468,6 +469,19 @@ export async function handleRestaurantTrialInbound(
     textLower === 'cancel order'
   ) {
     await cancelDraftCart(db, accountId, contactId)
+
+    void dispatchRestaurantOrderFlowEvent({
+      accountId,
+      contactId,
+      conversationId,
+      event: 'order.cancelled',
+      order: {
+        id: activeOrder?.id || `draft-${contactId}`,
+        order_number: activeOrder?.order_number || 'CANCELLED',
+        status: 'cancelled',
+      },
+      supabase: db,
+    })
     await engineSendText({
       accountId,
       userId: configOwnerUserId,
