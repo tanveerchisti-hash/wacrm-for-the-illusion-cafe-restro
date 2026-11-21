@@ -110,7 +110,7 @@ export function parseSummaryFromText(summaryText: string): {
       /^(?:[-*•🍕🍔🥤☕🥪🍟🍗\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX]\s+)?([A-Za-z0-9\s()&'\/\[\]\-]+?)(?:\s*\((\d+)\))?\s*[@:\-–=]+\s*₹?\s*(\d+(?:\.\d+)?)(?:\s*[@=xX]\s*₹?\s*(\d+(?:\.\d+)?))?$/u,
     )
     if (singleMatch && singleMatch[4]) {
-      let rawName = (singleMatch[2] || '').replace(/^[*_#•\-–\s]+|[*_#\s]+$/g, '').trim()
+      const rawName = (singleMatch[2] || '').replace(/^[*_#•\-–\s]+|[*_#\s]+$/g, '').trim()
       if (
         rawName &&
         !/^(?:total|subtotal|bill|amount|order\s*summary|estimated|delivery)$/i.test(rawName)
