@@ -18,6 +18,7 @@ import * as metaSend from '@/lib/flows/meta-send'
 vi.mock('@/lib/flows/meta-send', () => ({
   engineSendText: vi.fn().mockResolvedValue({ whatsapp_message_id: 'wamid-mock-1' }),
   engineSendInteractiveButtons: vi.fn().mockResolvedValue({ whatsapp_message_id: 'wamid-mock-2' }),
+  engineSendMedia: vi.fn().mockResolvedValue({ whatsapp_message_id: 'wamid-mock-media' }),
 }))
 
 describe('Restaurant Order Trial Workflow', () => {
@@ -566,8 +567,8 @@ describe('Restaurant Order Trial Workflow', () => {
 
     expect(result.order.payment_method).toBe('upi')
     expect(result.order.payment_status).toBe('awaiting_verification')
-    expect(result.messageText).toContain('test-illusioncafe@upi')
-    expect(result.messageText).toContain('staff will verify your payment')
+    expect(result.messageText).toContain('9352326442-8@ybl')
+    expect(result.messageText).toContain('manually verify payment')
   })
 
   // 8. UPI timer remains inactive until manual verification
@@ -823,5 +824,519 @@ describe('Restaurant Order Trial Workflow', () => {
     const itemsFromSummary = parseSummaryFromText(summary)
     expect(itemsFromSummary?.items.length).toBe(2)
     expect(itemsFromSummary?.subtotal).toBe(320)
+  })
+
+  describe('Focused PhonePe UPI QR Payment Workflow (10 Verification Tests)', () => {
+    const QR_TEST_URL = 'https://supabase.example.com/storage/v1/object/public/chat-media/account-acc-123/illusion_cafe_phonepe_qr.jpeg'
+    const OFFICIAL_UPI_ID = '9352326442-8@ybl'
+
+    function createMockOrder(overrides: Partial<TrialOrder> = {}): TrialOrder {
+      return {
+        id: 'order-upi-1',
+        account_id: ACCOUNT_ID,
+        contact_id: CONTACT_ID,
+        conversation_id: CONVERSATION_ID,
+        ordering_session_id: 'session-upi-1',
+        order_number: 'ORD-99001',
+        status: 'payment_pending',
+        items: [{ name: 'Chicken Pizza (7-inch)', quantity: 1, unit_price: 149, total_price: 149 }],
+        subtotal: 347,
+        delivery_fee: 0,
+        total_amount: 347,
+        fulfilment_type: 'delivery',
+        delivery_address: 'Nagar palika colony, shahpura',
+        delivery_location: null,
+        payment_method: null,
+        payment_status: null,
+        is_test_order: true,
+        kitchen_decision_by: USER_ID,
+        kitchen_decision_at: new Date().toISOString(),
+        kitchen_rejection_reason: null,
+        payment_confirmed_by: null,
+        payment_confirmed_at: null,
+        preparation_started_at: null,
+        estimated_prep_minutes: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        ...overrides,
+      }
+    }
+
+    // 1. Selecting UPI triggers the QR image and text instructions
+    it('1. Selecting UPI triggers the QR image and the text instructions', async () => {
+      const order = createMockOrder()
+      const updatedOrder = { ...order, payment_method: 'upi' as const, payment_status: 'awaiting_verification' as const }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_settings') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: {
+                  account_id: ACCOUNT_ID,
+                  test_upi_id: OFFICIAL_UPI_ID,
+                  test_qr_code_url: QR_TEST_URL,
+                  restaurant_name: 'The Illusion Cafe & Restaurant',
+                },
+                error: null,
+              }),
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: order, error: null }),
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnThis(),
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: updatedOrder, error: null }),
+              }),
+            }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await processPaymentMethod(db, {
+        orderId: order.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'upi',
+        configOwnerUserId: USER_ID,
+      })
+
+      expect(metaSend.engineSendMedia).toHaveBeenCalledTimes(1)
+      expect(metaSend.engineSendMedia).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: ACCOUNT_ID,
+          userId: USER_ID,
+          conversationId: CONVERSATION_ID,
+          contactId: CONTACT_ID,
+          kind: 'image',
+          link: QR_TEST_URL,
+          caption: expect.stringContaining('PhonePe QR'),
+        }),
+      )
+
+      expect(metaSend.engineSendText).toHaveBeenCalledTimes(1)
+      expect(metaSend.engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining(OFFICIAL_UPI_ID),
+        }),
+      )
+      expect(result.messageText).toContain('Scan the QR code above or use the UPI ID to pay')
+    })
+
+    // 2. The correct configured UPI ID is used
+    it('2. The correct configured UPI ID is used', async () => {
+      const order = createMockOrder()
+      const updatedOrder = { ...order, payment_method: 'upi' as const, payment_status: 'awaiting_verification' as const }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_settings') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { account_id: ACCOUNT_ID, test_upi_id: '9352326442-8@ybl', test_qr_code_url: QR_TEST_URL },
+                error: null,
+              }),
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: order, error: null }),
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnThis(),
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: updatedOrder, error: null }),
+              }),
+            }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await processPaymentMethod(db, {
+        orderId: order.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'upi',
+        configOwnerUserId: USER_ID,
+      })
+
+      expect(result.messageText).toContain('9352326442-8@ybl')
+      expect(result.messageText).not.toContain('test-illusioncafe@upi')
+    })
+
+    // 3. The QR URL is retrieved from the correct restaurant account
+    it('3. The QR URL is retrieved from the correct restaurant account', async () => {
+      const order = createMockOrder()
+      const updatedOrder = { ...order, payment_method: 'upi' as const, payment_status: 'awaiting_verification' as const }
+      const queriedAccounts: string[] = []
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_settings') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockImplementation((col: string, val: string) => {
+                if (col === 'account_id') queriedAccounts.push(val)
+                return {
+                  maybeSingle: vi.fn().mockResolvedValue({
+                    data: { account_id: val, test_upi_id: OFFICIAL_UPI_ID, test_qr_code_url: QR_TEST_URL },
+                    error: null,
+                  }),
+                }
+              }),
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: order, error: null }),
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnThis(),
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: updatedOrder, error: null }),
+              }),
+            }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      await processPaymentMethod(db, {
+        orderId: order.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'upi',
+        configOwnerUserId: USER_ID,
+      })
+
+      expect(queriedAccounts).toContain(ACCOUNT_ID)
+    })
+
+    // 4. The payable amount equals the saved order total_amount
+    it('4. The payable amount equals the saved order total_amount', async () => {
+      const order = createMockOrder({ total_amount: 1330 })
+      const updatedOrder = { ...order, payment_method: 'upi' as const, payment_status: 'awaiting_verification' as const }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_settings') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { account_id: ACCOUNT_ID, test_upi_id: OFFICIAL_UPI_ID, test_qr_code_url: QR_TEST_URL },
+                error: null,
+              }),
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: order, error: null }),
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnThis(),
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: updatedOrder, error: null }),
+              }),
+            }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await processPaymentMethod(db, {
+        orderId: order.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'upi',
+        configOwnerUserId: USER_ID,
+      })
+
+      expect(result.messageText).toContain('Amount Payable: ₹1330')
+      expect(result.messageText).not.toContain('₹300')
+    })
+
+    // 5. Payment remains awaiting verification
+    it('5. Payment remains awaiting verification', async () => {
+      const order = createMockOrder()
+      const updatedOrder = { ...order, payment_method: 'upi' as const, payment_status: 'awaiting_verification' as const }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_settings') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { account_id: ACCOUNT_ID, test_upi_id: OFFICIAL_UPI_ID, test_qr_code_url: QR_TEST_URL },
+                error: null,
+              }),
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: order, error: null }),
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnThis(),
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: updatedOrder, error: null }),
+              }),
+            }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await processPaymentMethod(db, {
+        orderId: order.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'upi',
+        configOwnerUserId: USER_ID,
+      })
+
+      expect(result.order.payment_status).toBe('awaiting_verification')
+      expect(result.order.status).toBe('payment_pending')
+      expect(result.messageText).toContain('Our restaurant staff will manually verify payment')
+    })
+
+    // 6. Replying "Paid" does not automatically verify payment
+    it('6. Replying "Paid" does not automatically verify payment', async () => {
+      const awaitingOrder = createMockOrder({
+        payment_method: 'upi',
+        payment_status: 'awaiting_verification',
+        status: 'payment_pending',
+      })
+
+      const updateSpy = vi.fn()
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              not: vi.fn().mockReturnThis(),
+              in: vi.fn().mockReturnThis(),
+              order: vi.fn().mockReturnThis(),
+              limit: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({ data: awaitingOrder, error: null }),
+              update: updateSpy,
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      const inboundRes = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-paid-1', type: 'text' },
+        inboundText: 'Paid',
+        interactiveReplyId: null,
+      })
+
+      expect(inboundRes.handled).toBe(true)
+      // Must NOT update payment_status to 'verified'
+      expect(updateSpy).not.toHaveBeenCalled()
+      expect(metaSend.engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('awaiting staff verification'),
+        }),
+      )
+    })
+
+    // 7. Duplicate UPI selections do not send duplicate instructions
+    it('7. Duplicate UPI selections do not send duplicate instructions', async () => {
+      const alreadyAwaitingOrder = createMockOrder({
+        payment_method: 'upi',
+        payment_status: 'awaiting_verification',
+        status: 'payment_pending',
+      })
+
+      const db = {
+        from: vi.fn(() => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: alreadyAwaitingOrder, error: null }),
+        })),
+      } as unknown as SupabaseClient
+
+      const result = await processPaymentMethod(db, {
+        orderId: alreadyAwaitingOrder.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'upi',
+        configOwnerUserId: USER_ID,
+      })
+
+      // Must NOT send media again
+      expect(metaSend.engineSendMedia).not.toHaveBeenCalled()
+      // Must acknowledge without re-sending full payment instructions
+      expect(result.messageText).toContain('already *awaiting staff verification*')
+    })
+
+    // 8. Missing or invalid QR configuration is handled safely without fake QR
+    it('8. Missing or invalid QR configuration is handled safely', async () => {
+      const order = createMockOrder()
+      const updatedOrder = { ...order, payment_method: 'upi' as const, payment_status: 'awaiting_verification' as const }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_settings') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              // test_qr_code_url is null
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { account_id: ACCOUNT_ID, test_upi_id: OFFICIAL_UPI_ID, test_qr_code_url: null },
+                error: null,
+              }),
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: order, error: null }),
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnThis(),
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: updatedOrder, error: null }),
+              }),
+            }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await processPaymentMethod(db, {
+        orderId: order.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'upi',
+        configOwnerUserId: USER_ID,
+      })
+
+      // engineSendMedia must NOT be called when QR URL is null
+      expect(metaSend.engineSendMedia).not.toHaveBeenCalled()
+      expect(result.messageText).toContain('Please use the UPI ID above to complete your payment')
+      expect(result.messageText).toContain(OFFICIAL_UPI_ID)
+    })
+
+    // 9. QR sending failures do not falsely claim success
+    it('9. QR sending failures do not falsely claim success', async () => {
+      const order = createMockOrder()
+      const updatedOrder = { ...order, payment_method: 'upi' as const, payment_status: 'awaiting_verification' as const }
+
+      // Mock engineSendMedia to reject
+      vi.mocked(metaSend.engineSendMedia).mockRejectedValueOnce(new Error('Meta 400: Failed to fetch image'))
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_settings') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { account_id: ACCOUNT_ID, test_upi_id: OFFICIAL_UPI_ID, test_qr_code_url: QR_TEST_URL },
+                error: null,
+              }),
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: order, error: null }),
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnThis(),
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: updatedOrder, error: null }),
+              }),
+            }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await processPaymentMethod(db, {
+        orderId: order.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'upi',
+        configOwnerUserId: USER_ID,
+      })
+
+      // Must not crash or claim scan QR above
+      expect(result.messageText).toContain('We could not deliver the QR code image at this moment')
+      expect(result.messageText).toContain(OFFICIAL_UPI_ID)
+      expect(metaSend.engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('could not deliver the QR code image'),
+        }),
+      )
+    })
+
+    // 10. Cash Payment and all existing Restaurant Workflow tests continue to pass
+    it('10. Cash Payment and all existing Restaurant Workflow tests continue to pass', async () => {
+      const order = createMockOrder({ fulfilment_type: 'takeaway', total_amount: 347 })
+      const cashUpdated = {
+        ...order,
+        payment_method: 'cash' as const,
+        payment_status: 'pending_collection' as const,
+        status: 'preparing' as const,
+      }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_settings') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+            }
+          }
+          if (table === 'restaurant_trial_order_items') {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockResolvedValue({
+                  data: [{ id: 'item-1', name: 'Pizza', quantity: 1, duration_minutes: 15 }],
+                  error: null,
+                }),
+              }),
+              update: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnThis(),
+                select: vi.fn().mockResolvedValue({ data: [], error: null }),
+              }),
+            }
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: order, error: null }),
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnThis(),
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: cashUpdated, error: null }),
+              }),
+            }),
+          }
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await processPaymentMethod(db, {
+        orderId: order.id,
+        accountId: ACCOUNT_ID,
+        paymentMethod: 'cash',
+        configOwnerUserId: USER_ID,
+      })
+
+      expect(result.order.payment_method).toBe('cash')
+      expect(result.order.payment_status).toBe('pending_collection')
+      expect(result.order.status).toBe('preparing')
+      expect(result.messageText).toContain('Payment Method: Cash')
+      expect(metaSend.engineSendMedia).not.toHaveBeenCalled()
+    })
   })
 })
