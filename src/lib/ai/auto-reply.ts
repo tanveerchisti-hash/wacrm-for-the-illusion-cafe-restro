@@ -1,3 +1,4 @@
+import type { AiUsage } from './types'
 import { supabaseAdmin } from './admin-client'
 import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
@@ -8,6 +9,7 @@ import {
   extractOrderConfirmedMarker,
 } from '@/lib/restaurant/order-trial'
 import { isRestaurantTrialEnabled } from '@/lib/restaurant/feature-flag'
+import { getMenuCatalogFormattedForAi } from '@/lib/restaurant/menu-catalog'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
@@ -169,17 +171,62 @@ export async function dispatchInboundToAiReply(
       latestUserMessage(messages),
     )
 
+    // For restaurant trial, inject the authoritative 56-item official menu catalog into prompt
+    let userPrompt = config.systemPrompt
+    if (isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })) {
+      userPrompt =
+        `${userPrompt || ''}\n\n` +
+        `OFFICIAL RESTAURANT MENU CATALOG (The Illusion Cafe & Restaurant):\n` +
+        `Use ONLY these official items, exact names, and prices when answering questions:\n` +
+        `${getMenuCatalogFormattedForAi()}`
+    }
+
     const systemPrompt = buildSystemPrompt({
-      userPrompt: config.systemPrompt,
+      userPrompt,
       mode: 'auto_reply',
       knowledge,
     })
 
-    const { text, handoff, usage } = await generateReply({
-      config,
-      systemPrompt,
-      messages,
-    })
+    let generatedText: string | null = null
+    let isHandoff = false
+    let tokenUsage: AiUsage | null = null
+
+    try {
+      const genResult = await generateReply({
+        config,
+        systemPrompt,
+        messages,
+      })
+      generatedText = genResult.text
+      isHandoff = genResult.handoff
+      tokenUsage = genResult.usage
+    } catch (genError) {
+      console.error('[ai auto-reply] AI generation provider error:', {
+        accountId,
+        conversationId,
+        provider: config.provider,
+        model: config.model,
+        error: genError instanceof Error ? genError.message : String(genError),
+      })
+
+      // Send graceful customer fallback so user is never left with hanging "typing..."
+      if (isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })) {
+        const networkFallback =
+          `Namaste! We received your message. Please reply with the items you'd like to order (e.g. "1 Chicken Pizza and 2 Cold Coffee"), or send 'menu' to view our menu!`
+
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: networkFallback,
+          aiGenerated: true,
+        }).catch((err) => console.error('[ai auto-reply] network fallback send failed:', err))
+
+        return
+      }
+      throw genError
+    }
 
     // Record token spend on the account's BYO key. Fire-and-forget so it
     // never adds latency to the customer-facing send: `logAiUsage`
@@ -192,10 +239,28 @@ export async function dispatchInboundToAiReply(
       mode: 'auto_reply',
       provider: config.provider,
       model: config.model,
-      usage,
+      usage: tokenUsage,
     })
 
-    if (handoff || !text) {
+    if (isHandoff || !generatedText) {
+      // For restaurant trial orders, do NOT disable the bot permanently on recoverable handoff
+      if (isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })) {
+        const fallbackMenuMsg =
+          `Namaste! We're delighted to serve you at Illusion Cafe & Restaurant! 🍽️\n\n` +
+          `Please let us know what items you'd like to order (e.g. "1 Chicken Pizza and 2 Cold Coffee"), or reply 'menu' to view our full menu.`
+
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: fallbackMenuMsg,
+          aiGenerated: true,
+        }).catch((err) => console.error('[ai auto-reply] trial fallback send failed:', err))
+
+        return
+      }
+
       // The model can't (or shouldn't) answer — stop auto-replying on
       // this thread and hand it to a human. We (a) pause the bot here
       // (sticky until re-enabled), (b) route the conversation to the
@@ -222,6 +287,8 @@ export async function dispatchInboundToAiReply(
       }
       return
     }
+
+    const text = generatedText
 
     if (
       inboundMessageId &&

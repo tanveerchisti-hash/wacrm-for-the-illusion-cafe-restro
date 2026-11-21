@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AiConfig } from './types'
 
 // Shared, hoisted mock state so the module mocks can close over it.
@@ -385,5 +385,44 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(pause?.isNull).toEqual([])
     expect(assign?.payload).toEqual({ assigned_agent_id: 'agent-7' })
     expect(assign?.isNull).toEqual(['assigned_agent_id'])
+  })
+})
+
+describe('dispatchInboundToAiReply — restaurant trial error & handoff protection', () => {
+  const origEnv = process.env.RESTAURANT_ORDER_TRIAL_ENABLED
+
+  beforeEach(() => {
+    process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'true'
+  })
+
+  afterEach(() => {
+    process.env.RESTAURANT_ORDER_TRIAL_ENABLED = origEnv
+  })
+
+  it('sends graceful customer fallback without crashing when AI provider throws an error during restaurant trial', async () => {
+    h.generateReply.mockRejectedValue(new Error('Groq provider timeout'))
+
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.not.toThrow()
+
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: ARGS.accountId,
+        conversationId: ARGS.conversationId,
+        text: expect.stringContaining('Namaste! We received your message'),
+      }),
+    )
+  })
+
+  it('does NOT disable auto-reply on handoff during restaurant trial; sends helpful menu fallback instead', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("We're delighted to serve you at Illusion Cafe & Restaurant!"),
+      }),
+    )
+    expect(h.state.updatePayload?.ai_autoreply_disabled).toBeUndefined()
   })
 })
