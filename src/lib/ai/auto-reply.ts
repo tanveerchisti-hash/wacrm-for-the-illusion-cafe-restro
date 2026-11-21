@@ -33,6 +33,8 @@ interface DispatchArgs {
    *  a typing indicator (which also marks it read) is shown while the
    *  reply is generated. Optional so older callers keep working. */
   inboundMessageId?: string
+  /** The Meta WhatsApp phone number ID associated with the inbound message. */
+  phoneNumberId?: string
 }
 
 /**
@@ -63,6 +65,7 @@ export async function dispatchInboundToAiReply(
     contactId,
     configOwnerUserId,
     inboundMessageId,
+    phoneNumberId,
   } = args
 
   try {
@@ -70,7 +73,6 @@ export async function dispatchInboundToAiReply(
 
     const config = await loadAiConfig(db, accountId)
     if (!config || !config.autoReplyEnabled) return
-
 
     // Automation/AI coordination is handled by the webhook.
     // Do not block AI merely because an automation is active.
@@ -89,7 +91,6 @@ export async function dispatchInboundToAiReply(
     // below (this read can race a concurrent inbound).
     if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
 
-
     // Find the customer's current ordering session.
     // When active, use only messages from this session.
     const activeOrderingSession = await getActiveOrderingSession(
@@ -99,7 +100,7 @@ export async function dispatchInboundToAiReply(
     )
 
     // Stage 1 Gate: Do not let AI proceed to delivery or payment while kitchen approval is pending
-    if (isRestaurantTrialEnabled({ accountId })) {
+    if (isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })) {
       try {
         const activeTrialOrder = await getActiveTrialOrder(db, accountId, contactId)
         if (activeTrialOrder && activeTrialOrder.status === 'pending_kitchen') {
@@ -252,7 +253,7 @@ export async function dispatchInboundToAiReply(
     if (claimed !== true) return
 
     let replyText = text
-    if (isRestaurantTrialEnabled({ accountId })) {
+    if (isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })) {
       try {
         const { cleanText, payload } = extractOrderConfirmedMarker(text)
         if (payload && payload.items.length > 0) {
@@ -283,7 +284,11 @@ export async function dispatchInboundToAiReply(
       aiGenerated: true,
     })
   } catch (err) {
-    console.error('[ai auto-reply] dispatch failed:', err)
+    console.error('[ai auto-reply] dispatch failed:', {
+      accountId,
+      conversationId,
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 }
 

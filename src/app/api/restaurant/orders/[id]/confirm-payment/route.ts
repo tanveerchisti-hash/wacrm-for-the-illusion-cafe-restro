@@ -16,7 +16,7 @@ export async function POST(
     const ctx = await requireRole('agent')
     const { id: orderId } = await params
 
-    if (!isRestaurantTrialEnabled({ accountId: ctx.accountId })) {
+    if (!isRestaurantTrialEnabled({ accountId: ctx.accountId, scope: 'staff' })) {
       return NextResponse.json(
         { error: 'Restaurant order trial feature is disabled' },
         { status: 403 },

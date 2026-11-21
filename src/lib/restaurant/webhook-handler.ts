@@ -8,7 +8,7 @@ import {
 } from './order-trial'
 import { engineSendText } from '@/lib/flows/meta-send'
 
-interface TrialInboundArgs {
+export interface TrialInboundArgs {
   db: SupabaseClient
   accountId: string
   contactId: string
@@ -24,41 +24,134 @@ interface TrialInboundArgs {
 }
 
 /**
+ * Check if the inbound customer message signifies final order confirmation.
+ * Handles option "1" from summary menus, standard English phrases, and Hinglish variants.
+ */
+export function isOrderConfirmationPhrase(text: string): boolean {
+  const trimmed = text.trim().toLowerCase()
+
+  // 1. Option 1 from summary menus: "1", "1.", "1. confirm details", "1 confirm", "1 details"
+  if (/^1(?:[.)\s\-:]*(?:confirm(?:\s+details|\s+order)?|yes|ha|haan)?)?$/i.test(trimmed)) {
+    return true
+  }
+
+  // 2. Explicit English and Hinglish phrases (e.g. "confirm", "yes confirm", "ha confirm", "confirm kardo", "order confirm")
+  if (
+    /^(?:(?:ha|haan|ji\s+ha|yes|ok|okay)[,.\s]+)?(?:confirm(?:\s+(?:order|details|my\s+order|kardo|kar\s*do|kijiye|karo))?|order\s+confirm(?:\s*(?:kardo|kar\s*do))?|place\s+order|proceed|kardo\s+confirm)$/i.test(
+      trimmed,
+    )
+  ) {
+    return true
+  }
+
+  return false
+}
+
+/**
  * Parses itemized lines and total from a recent bot order summary message.
- * Supports patterns like:
- * "- 2x Veg Burger: ₹240"
- * "1x Cold Coffee - 80"
- * "Total: 320" or "Total: ₹320"
+ * Supports real-world WhatsApp summaries with emojis, multiline prices,
+ * formatted item lines, and item options.
+ *
+ * Example summary inputs:
+ * "1. Chicken Malai Box (4 pieces) - ₹119"
+ * "2. Malai Kabab (4 pieces) - ₹199"
+ * "3. Cold Coffee (4) - ₹396"
+ * "• 1x Margherita Pizza - ₹250"
+ * "Total: ₹964"
  */
 export function parseSummaryFromText(summaryText: string): {
   items: TrialOrderItem[]
   subtotal: number
 } | null {
-  const lines = summaryText.split('\n').map((l) => l.trim())
+  const lines = summaryText.split('\n').map((l) => l.trim()).filter(Boolean)
   const items: TrialOrderItem[] = []
   let subtotal = 0
 
+  // Filter out non-food menu options presented to customer
+  const ignoredOptionPatterns = [
+    /confirm\s*(?:details|order)/i,
+    /add\s*more\s*items/i,
+    /remove\s*(?:an\s*)?item/i,
+    /cancel\s*(?:enquiry|order)/i,
+    /main\s*menu/i,
+    /choose\s*(?:an\s*)?option/i,
+    /reply\s*with/i,
+    /delivery\s*(?:or|vs)\s*takeaway/i,
+    /cash\s*or\s*upi/i,
+    /view\s*menu/i,
+    /submit\s*review/i,
+  ]
+
   for (const line of lines) {
-    // Look for lines like "2x Pizza - ₹300" or "- 2 Burger : 240" or "1 Coffee: ₹80"
-    const itemMatch = line.match(
-      /(?:^[-*•]\s*)?(\d+)\s*[xX]?\s+([A-Za-z\s]+?)\s*[:\-–]\s*₹?\s*(\d+(?:\.\d+)?)/,
-    )
-    if (itemMatch) {
-      const quantity = parseInt(itemMatch[1], 10) || 1
-      const name = itemMatch[2].trim()
-      const totalPrice = parseFloat(itemMatch[3]) || 0
-      const unitPrice = quantity > 0 ? totalPrice / quantity : totalPrice
-      items.push({
-        name,
-        quantity,
-        unit_price: unitPrice,
-        total_price: totalPrice,
-      })
+    // 1. Skip non-item option lines
+    if (ignoredOptionPatterns.some((pattern) => pattern.test(line))) {
+      continue
     }
 
-    const totalMatch = line.match(/(?:total|amount|subtotal)\s*[:\-–]\s*₹?\s*(\d+(?:\.\d+)?)/i)
+    // 2. Check for Total / Subtotal line
+    const totalMatch = line.match(
+      /(?:\*|_)?(?:total(?:\s+amount)?|subtotal|bill|grand\s*total)(?:\*|_)?[\s*:\-–=]+(?:\*|_)?₹?\s*(\d+(?:\.\d+)?)/i,
+    )
     if (totalMatch) {
-      subtotal = parseFloat(totalMatch[1]) || 0
+      const parsedTotal = parseFloat(totalMatch[1])
+      if (parsedTotal > 0) {
+        subtotal = parsedTotal
+      }
+      continue
+    }
+
+    // 3. Match items with price.
+    // Supports patterns:
+    // "- 2x Veg Burger: ₹240"
+    // "1. Chicken Malai Box (4 pieces) - ₹119"
+    // "• 2x Malai Chicken Pizza (7 inch) - ₹298"
+    // "Cold Coffee (4) - ₹396"
+    // "🍕 1x Margherita Pizza : ₹250"
+    // "2x Cheese Maggi @ ₹79 = ₹158"
+    const match = line.match(
+      /^(?:[-*•🍕🍔🥤🥪🍟🍗\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX]\s+)?([A-Za-z0-9\s()&'\/]+?)(?:\s*\((\d+)\))?\s*[@:\-–=]+\s*₹?\s*(\d+(?:\.\d+)?)(?:\s*[@=]\s*₹?\s*(\d+(?:\.\d+)?))?/u,
+    )
+
+    if (match) {
+      let rawName = match[2] ? match[2].trim() : ''
+      rawName = rawName.replace(/^[*_#•\-–\s]+|[*_#\s]+$/g, '').trim()
+
+      if (
+        !rawName ||
+        /^(?:total|subtotal|bill|amount|order\s*summary|here\s*is|please\s*choose)$/i.test(rawName)
+      ) {
+        continue
+      }
+
+      let quantity = 1
+      if (match[1]) {
+        quantity = parseInt(match[1], 10) || 1
+      } else if (match[3]) {
+        quantity = parseInt(match[3], 10) || 1
+      }
+
+      let totalPrice = 0
+      let unitPrice = 0
+
+      const priceVal1 = parseFloat(match[4]) || 0
+      const priceVal2 = match[5] ? parseFloat(match[5]) : 0
+
+      if (priceVal2 > 0) {
+        unitPrice = priceVal1
+        totalPrice = priceVal2
+      } else {
+        totalPrice = priceVal1
+        unitPrice = quantity > 0 ? Math.round((totalPrice / quantity) * 100) / 100 : totalPrice
+      }
+
+      if (totalPrice > 0 && rawName.length >= 3) {
+        items.push({
+          name: rawName,
+          quantity,
+          unit_price: unitPrice,
+          total_price: totalPrice,
+        })
+      }
     }
   }
 
@@ -97,6 +190,7 @@ export async function handleRestaurantTrialInbound(
   // ==========================================================
   if (activeOrder) {
     // Stage 1 Gate: Order is awaiting kitchen confirmation
+    // Do NOT let AI proceed to delivery or payment while kitchen approval is pending
     if (activeOrder.status === 'pending_kitchen') {
       const reminder =
         `⏳ Your order *#${activeOrder.order_number}* is currently awaiting kitchen confirmation ` +
@@ -115,24 +209,7 @@ export async function handleRestaurantTrialInbound(
 
     // Stage 3: Fulfilment Selection (Delivery vs Takeaway)
     if (activeOrder.status === 'fulfilment_pending') {
-      // User tapped or sent Delivery
-      if (
-        interactiveReplyId === 'fulfilment_delivery' ||
-        textLower === 'delivery' ||
-        textLower === '1'
-      ) {
-        await engineSendText({
-          accountId,
-          userId: configOwnerUserId,
-          conversationId,
-          contactId,
-          text: `🛵 *Delivery Selected!*\n\nPlease reply with your full delivery address or share your location via WhatsApp.`,
-        }).catch((err) => console.error('[order-trial] delivery prompt failed:', err))
-
-        return { handled: true }
-      }
-
-      // Location message provided for delivery
+      // 1. Native WhatsApp location pin payload
       if (message.type === 'location' && message.location) {
         const loc = message.location
         const address =
@@ -151,7 +228,44 @@ export async function handleRestaurantTrialInbound(
         return { handled: true }
       }
 
-      // User sent their address as text (not just the word "delivery")
+      // 2. Text containing GPS coordinates (e.g. from shared WhatsApp location text)
+      const hasGpsCoordinates = /[-+]?\d{1,2}\.\d+[\s,]+[-+]?\d{1,3}\.\d+/.test(inboundText)
+      if (hasGpsCoordinates) {
+        const coordMatch = inboundText.match(/([-+]?\d{1,2}\.\d+)[\s,]+([-+]?\d{1,3}\.\d+)/)
+        const locationObj = coordMatch
+          ? { latitude: parseFloat(coordMatch[1]), longitude: parseFloat(coordMatch[2]) }
+          : null
+
+        await updateOrderFulfilment(db, {
+          orderId: activeOrder.id,
+          accountId,
+          fulfilmentType: 'delivery',
+          address: inboundText.trim(),
+          location: locationObj,
+          configOwnerUserId,
+        })
+
+        return { handled: true }
+      }
+
+      // 3. User tapped or typed Delivery
+      if (
+        interactiveReplyId === 'fulfilment_delivery' ||
+        textLower === 'delivery' ||
+        textLower === '1'
+      ) {
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: `🛵 *Delivery Selected!*\n\nPlease reply with your full delivery address or share your location pin via WhatsApp.`,
+        }).catch((err) => console.error('[order-trial] delivery prompt failed:', err))
+
+        return { handled: true }
+      }
+
+      // 4. User sent address as text
       if (
         textLower.length > 5 &&
         !textLower.includes('takeaway') &&
@@ -169,7 +283,7 @@ export async function handleRestaurantTrialInbound(
         return { handled: true }
       }
 
-      // User tapped or sent Takeaway
+      // 5. User tapped or sent Takeaway
       if (
         interactiveReplyId === 'fulfilment_takeaway' ||
         textLower.includes('takeaway') ||
@@ -245,14 +359,7 @@ export async function handleRestaurantTrialInbound(
   // ==========================================================
   // CASE 2: No active order yet — Check for final order confirmation
   // ==========================================================
-  const isConfirmPhrase =
-    textLower === 'confirm order' ||
-    textLower === 'confirm' ||
-    textLower === 'yes confirm' ||
-    textLower === 'yes please confirm' ||
-    textLower === 'place order'
-
-  if (isConfirmPhrase) {
+  if (isOrderConfirmationPhrase(inboundText)) {
     // Look up recent bot messages to extract item summary
     const { data: recentMsgs } = await db
       .from('messages')
@@ -260,26 +367,39 @@ export async function handleRestaurantTrialInbound(
       .eq('conversation_id', conversationId)
       .eq('sender_type', 'bot')
       .order('created_at', { ascending: false })
-      .limit(3)
+      .limit(5)
 
     let parsedSummary: { items: TrialOrderItem[]; subtotal: number } | null = null
 
     for (const msg of recentMsgs ?? []) {
       if (msg.content_text) {
         parsedSummary = parseSummaryFromText(msg.content_text)
-        if (parsedSummary) break
+        if (parsedSummary && parsedSummary.items.length > 0) break
       }
     }
 
-    // If no summary was matched by regex, use sensible trial items so the workflow proceeds cleanly
-    const items = parsedSummary?.items?.length
-      ? parsedSummary.items
-      : [
-          { name: 'Veg Burger', quantity: 2, unit_price: 120, total_price: 240 },
-          { name: 'Cold Coffee', quantity: 1, unit_price: 80, total_price: 80 },
-        ]
+    // Bug 3 Fix: If no summary was matched, request clarification instead of creating dummy Veg Burger!
+    if (!parsedSummary || parsedSummary.items.length === 0) {
+      // Only consume the message if it looked like an order confirmation attempt
+      if (textLower === '1' && (!recentMsgs || recentMsgs.length === 0)) {
+        return { handled: false }
+      }
 
-    const subtotal = parsedSummary?.subtotal || items.reduce((acc, i) => acc + i.total_price, 0)
+      await engineSendText({
+        accountId,
+        userId: configOwnerUserId,
+        conversationId,
+        contactId,
+        text:
+          `We couldn't confirm the exact items for your order. ` +
+          `Please reply with the items and quantities you'd like to order (e.g. "1 Chicken Pizza and 2 Cold Coffee"), ` +
+          `or send 'menu' to view our menu.`,
+      }).catch((err) => console.error('[order-trial] clarification send error:', err))
+
+      return { handled: true }
+    }
+
+    const { items, subtotal } = parsedSummary
 
     const newOrder = await createTrialOrder(db, {
       accountId,

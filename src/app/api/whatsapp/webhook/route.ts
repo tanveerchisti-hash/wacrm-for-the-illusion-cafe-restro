@@ -1,7 +1,7 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { mirrorInboundMedia } from '@/lib/whatsapp/mirror-inbound-media'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import {
@@ -888,7 +888,7 @@ async function processMessage(
   // RESTAURANT TRIAL ORDER WORKFLOW
   // Server-enforced feature flag: strictly scoped to authorized account and test phone number
   // ============================================================
-  if (isRestaurantTrialEnabled({ accountId, phoneNumberId })) {
+  if (isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })) {
     const trialResult = await handleRestaurantTrialInbound({
       db: supabaseAdmin(),
       accountId,
@@ -1064,6 +1064,7 @@ if (
       // Lets the bot show "typing…" (and mark the message read) while
       // the reply is generated.
       inboundMessageId: message.id,
+      phoneNumberId,
     })
   }
 
