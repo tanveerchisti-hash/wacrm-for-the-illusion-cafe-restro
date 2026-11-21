@@ -47,7 +47,7 @@ export interface TrialInboundArgs {
 
 export function isOrderConfirmationPhrase(text: string): boolean {
   const normalized = text
-    .normalize('NFKC')z
+    .normalize('NFKC')
     .toLowerCase()
     .replace(/[\u200b-\u200d\uFEFF]/g, '')
     .replace(/[.,!।]+/g, ' ')
