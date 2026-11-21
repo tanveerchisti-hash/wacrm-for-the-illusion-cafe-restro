@@ -120,10 +120,6 @@ export function isOrderConfirmationPhrase(text: string): boolean {
   return confirmationPatterns.some((pattern) => pattern.test(intent))
 }
 
-
-  return false
-}
-
 /**
  * Parses itemized lines and total from a recent bot order summary message.
  * Supports:
