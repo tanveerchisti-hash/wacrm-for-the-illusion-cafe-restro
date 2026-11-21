@@ -50,6 +50,7 @@ import {
 } from '@/components/ui/dialog'
 import { useAuth } from '@/hooks/use-auth'
 import { FlowStatusBadge } from '@/components/backend-flows/flow-status-badge'
+import { BackendFlowCanvas } from '@/components/backend-flows/canvas/backend-flow-canvas'
 import {
   canPublishBackendFlow,
   canEditBackendFlow,
@@ -59,7 +60,9 @@ import type {
   BackendFlowCategory,
   BackendFlowTriggerType,
   BackendFlowVersion,
+  BackendFlowDefinition,
 } from '@/lib/backend-flows/types'
+import type { CanvasValidationResult } from '@/lib/backend-flows/canvas-types'
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -90,6 +93,12 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
   const [timeoutSeconds, setTimeoutSeconds] = useState(300)
   const [maxRetries, setMaxRetries] = useState(3)
   const [definitionStr, setDefinitionStr] = useState('{\n  "nodes": [],\n  "edges": []\n}')
+  const [canvasDefinition, setCanvasDefinition] = useState<BackendFlowDefinition>({
+    nodes: [],
+    edges: [],
+  })
+  const [canvasValidation, setCanvasValidation] = useState<CanvasValidationResult | null>(null)
+  const [viewMode, setViewMode] = useState<'canvas' | 'json'>('canvas')
 
   const loadFlow = useCallback(async () => {
     try {
@@ -106,7 +115,10 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
       setTriggerConfigStr(JSON.stringify(f.trigger_config || {}, null, 2))
       setTimeoutSeconds(f.metadata?.timeout_seconds ?? 300)
       setMaxRetries(f.metadata?.max_retries ?? 3)
-      setDefinitionStr(JSON.stringify(f.definition || { nodes: [], edges: [] }, null, 2))
+
+      const def: BackendFlowDefinition = f.definition || { nodes: [], edges: [] }
+      setCanvasDefinition(def)
+      setDefinitionStr(JSON.stringify(def, null, 2))
     } catch (err) {
       console.error(err)
       toast.error('Failed to load workflow')
@@ -134,7 +146,7 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
 
   const handleSave = async () => {
     let parsedTriggerConfig = {}
-    let parsedDefinition = { nodes: [], edges: [] }
+    let parsedDefinition = canvasDefinition
 
     try {
       parsedTriggerConfig = JSON.parse(triggerConfigStr)
@@ -143,11 +155,13 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
       return
     }
 
-    try {
-      parsedDefinition = JSON.parse(definitionStr)
-    } catch {
-      toast.error('Definition must be valid JSON')
-      return
+    if (viewMode === 'json') {
+      try {
+        parsedDefinition = JSON.parse(definitionStr)
+      } catch {
+        toast.error('Definition must be valid JSON')
+        return
+      }
     }
 
     setSaving(true)
@@ -181,6 +195,17 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
     } finally {
       setSaving(false)
     }
+  }
+
+  const onOpenPublishDialog = () => {
+    if (canvasValidation && !canvasValidation.valid) {
+      toast.error(
+        canvasValidation.errors[0]?.message ||
+          'Workflow has validation errors. Fix them before publishing.'
+      )
+      return
+    }
+    setPublishDialogOpen(true)
   }
 
   const handlePublish = async () => {
@@ -292,7 +317,7 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
           <GatedButton
             canAct={canPublish}
             gateReason="publish workflow releases"
-            onClick={() => setPublishDialogOpen(true)}
+            onClick={onOpenPublishDialog}
             size="sm"
             className="flex items-center gap-1.5"
           >
@@ -437,36 +462,80 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
           </Card>
         </TabsContent>
 
-        {/* Tab 2: Pipeline Definition (@xyflow ready) */}
-        <TabsContent value="definition">
+        {/* Tab 2: Visual Pipeline Canvas & Definition */}
+        <TabsContent value="definition" className="space-y-4">
           <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
+            <CardHeader className="pb-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <CardTitle className="text-base flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />
-                    Workflow Pipeline Schema
+                    Interactive Workflow Builder
                   </CardTitle>
                   <CardDescription>
-                    Structured graph definition (nodes & edges) aligned with the visual builder engine.
+                    Drag-and-drop canvas to wire triggers, actions, and conditional decision trees.
                   </CardDescription>
                 </div>
-                <Badge variant="secondary" className="font-mono text-xs">
-                  @xyflow/react Ready
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center rounded-lg border bg-muted/60 p-0.5 text-xs">
+                    <Button
+                      type="button"
+                      variant={viewMode === 'canvas' ? 'secondary' : 'ghost'}
+                      size="sm"
+                      className="h-7 px-3 text-xs"
+                      onClick={() => setViewMode('canvas')}
+                    >
+                      Visual Canvas
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={viewMode === 'json' ? 'secondary' : 'ghost'}
+                      size="sm"
+                      className="h-7 px-3 text-xs"
+                      onClick={() => setViewMode('json')}
+                    >
+                      Raw JSON
+                    </Button>
+                  </div>
+                </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Nodes & Edges Definition (JSON)</Label>
-                <Textarea
-                  value={definitionStr}
-                  onChange={(e) => setDefinitionStr(e.target.value)}
+            <CardContent>
+              {viewMode === 'canvas' ? (
+                <BackendFlowCanvas
+                  initialDefinition={canvasDefinition}
+                  onChange={(newDef) => {
+                    setCanvasDefinition(newDef)
+                    setDefinitionStr(JSON.stringify(newDef, null, 2))
+                  }}
+                  onValidationChange={setCanvasValidation}
                   disabled={!canEdit}
-                  rows={16}
-                  className="font-mono text-xs"
                 />
-              </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Nodes & Edges Definition (JSON)</Label>
+                    <span className="text-xs text-muted-foreground">
+                      Edit JSON directly or switch back to Visual Canvas
+                    </span>
+                  </div>
+                  <Textarea
+                    value={definitionStr}
+                    onChange={(e) => {
+                      setDefinitionStr(e.target.value)
+                      try {
+                        const parsed = JSON.parse(e.target.value)
+                        setCanvasDefinition(parsed)
+                      } catch {
+                        // ignore syntax errors until save
+                      }
+                    }}
+                    disabled={!canEdit}
+                    rows={18}
+                    className="font-mono text-xs"
+                  />
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
