@@ -16,6 +16,7 @@ function createChainedMock(defaultData: unknown = null) {
   const query: Record<string, unknown> = {}
   query.select = vi.fn().mockReturnValue(query)
   query.eq = vi.fn().mockReturnValue(query)
+  query.neq = vi.fn().mockReturnValue(query)
   query.in = vi.fn().mockReturnValue(query)
   query.not = vi.fn().mockReturnValue(query)
   query.order = vi.fn().mockReturnValue(query)
@@ -60,8 +61,12 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
       expect(isOrderConfirmationPhrase('confirm order')).toBe(true)
       expect(isOrderConfirmationPhrase('confirm details')).toBe(true)
       expect(isOrderConfirmationPhrase('yes confirm')).toBe(true)
+      expect(isOrderConfirmationPhrase('yes confirm this')).toBe(true)
+      expect(isOrderConfirmationPhrase('confirm this')).toBe(true)
+      expect(isOrderConfirmationPhrase('confirm it')).toBe(true)
       expect(isOrderConfirmationPhrase('yes confirm order')).toBe(true)
       expect(isOrderConfirmationPhrase('place order')).toBe(true)
+      expect(isOrderConfirmationPhrase('proceed')).toBe(true)
 
       // Hinglish / Hindi variants
       expect(isOrderConfirmationPhrase('confirm kardo')).toBe(true)
@@ -71,6 +76,8 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
       expect(isOrderConfirmationPhrase('order confirm kardo')).toBe(true)
       expect(isOrderConfirmationPhrase('ha confirm kar do')).toBe(true)
       expect(isOrderConfirmationPhrase('kardo confirm')).toBe(true)
+      expect(isOrderConfirmationPhrase('Order kr de yahi')).toBe(true)
+      expect(isOrderConfirmationPhrase('order kardo')).toBe(true)
 
       // Negative cases: other options or unrelated text
       expect(isOrderConfirmationPhrase('2')).toBe(false)
@@ -84,6 +91,43 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
   })
 
   describe('Bug 3: Real order parsing and removal of hardcoded fallback', () => {
+    it('parses multi-line two-row summaries from AI agent (item on line 1, price on line 2)', () => {
+      const summaryText =
+        `🍽️ ILLUSION CAFE & RESTAURANT\n\n` +
+        `📜 Your Order Summary\n\n` +
+        `🍕 1 x Chicken Pizza (7-inch)\n` +
+        `₹149 x 1 = ₹149\n\n` +
+        `☕ 2 x Cold Coffee (200 ml)\n` +
+        `₹99 x 2 = ₹198\n\n` +
+        `💰 Food Subtotal: ₹347\n` +
+        `🚚 Delivery Charge: FREE (₹300+)\n\n` +
+        `💳 Estimated Total: ₹347\n\n` +
+        `😋 What's Next?\n\n` +
+        `Would you like to confirm these details, add/remove items, or cancel?\n\n` +
+        `1️⃣ Confirm Details\n` +
+        `2️⃣ Add More Items\n` +
+        `3️⃣ Remove an Item\n` +
+        `4️⃣ Cancel Enquiry\n\n` +
+        `👉 Also, is this for Delivery or Takeaway?`
+
+      const parsed = parseSummaryFromText(summaryText)
+      expect(parsed).not.toBeNull()
+      expect(parsed?.items).toHaveLength(2)
+      expect(parsed?.subtotal).toBe(347)
+      expect(parsed?.items[0]).toEqual({
+        name: 'Chicken Pizza (7-inch)',
+        quantity: 1,
+        unit_price: 149,
+        total_price: 149,
+      })
+      expect(parsed?.items[1]).toEqual({
+        name: 'Cold Coffee (200 ml)',
+        quantity: 2,
+        unit_price: 99,
+        total_price: 198,
+      })
+    })
+
     it('parses real Illusion Cafe order summaries with multiple quantities and prices', () => {
       const summaryText =
         `Here is your order summary:\n` +
@@ -163,7 +207,12 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
           if (table === 'messages') {
             const query = createChainedMock()
             query.limit = vi.fn().mockResolvedValue({
-              data: [{ content_text: 'Hello, how can I help you today?' }],
+              data: [
+                {
+                  content_text:
+                    'Your Order Summary:\nSomething went wrong with menu\nConfirm Details (1)',
+                },
+              ],
               error: null,
             })
             return query
@@ -191,6 +240,38 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
           text: expect.stringContaining("couldn't confirm the exact items"),
         }),
       )
+    })
+
+    it('returns handled: false when inbound is just a generic yes/1 with no prior order summary in conversation', async () => {
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            return createChainedMock(null)
+          }
+          if (table === 'messages') {
+            const query = createChainedMock()
+            query.limit = vi.fn().mockResolvedValue({
+              data: [{ content_text: 'Welcome to our store! We are open 9am to 10pm.' }],
+              error: null,
+            })
+            return query
+          }
+          return createChainedMock(null)
+        }),
+      } as unknown as SupabaseClient
+
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-2', type: 'text' },
+        inboundText: '1',
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(false)
     })
   })
 
