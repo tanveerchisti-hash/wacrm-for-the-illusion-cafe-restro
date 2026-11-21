@@ -18,6 +18,12 @@ export function matchesTrigger(
     return false
   }
 
+  // Emergency safety pause check: paused workflows are bypassed
+  const metadata = (flow.metadata || {}) as Record<string, unknown>
+  if (metadata.is_paused === true) {
+    return false
+  }
+
   // Lifecycle check: only published workflows execute in production unless allowDraft is set
   if (flow.status !== 'published' && !options?.allowDraft) {
     return false

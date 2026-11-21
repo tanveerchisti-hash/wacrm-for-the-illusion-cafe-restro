@@ -12,6 +12,7 @@ import {
   CreditCard,
   GitBranch,
   LayoutGrid,
+  FlaskConical,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -32,6 +33,7 @@ import type { CanvasValidationResult } from '@/lib/backend-flows/canvas-types'
 interface CanvasToolbarProps {
   onAddNode: (type: 'trigger' | 'action' | 'condition', subType: string, label: string) => void
   onAutoLayout: () => void
+  onOpenSimulator?: () => void
   validation: CanvasValidationResult
   disabled?: boolean
 }
@@ -39,6 +41,7 @@ interface CanvasToolbarProps {
 export function CanvasToolbar({
   onAddNode,
   onAutoLayout,
+  onOpenSimulator,
   validation,
   disabled,
 }: CanvasToolbarProps) {
@@ -161,6 +164,18 @@ export function CanvasToolbar({
           <LayoutGrid className="h-3.5 w-3.5" />
           <span>Auto Layout</span>
         </Button>
+
+        {onOpenSimulator && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-primary hover:text-primary"
+            onClick={onOpenSimulator}
+          >
+            <FlaskConical className="h-3.5 w-3.5 text-primary" />
+            <span>Simulator</span>
+          </Button>
+        )}
       </div>
 
       {/* Right side: Real-time Canvas Validation Status */}

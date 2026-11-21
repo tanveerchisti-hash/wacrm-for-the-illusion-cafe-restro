@@ -10,6 +10,7 @@ interface GraphRunnerOptions {
   initialVariables: Record<string, unknown>
   maxRetries?: number
   timeoutMs?: number
+  isDryRun?: boolean
 }
 
 /**
@@ -123,13 +124,13 @@ export async function executeFlowGraph(
     // 3. Action Node Execution (with Retry capability)
     if (node.type === 'action') {
       let attempts = 0
-      let actionOutput = await executeActionNode(node, variables)
+      let actionOutput = await executeActionNode(node, variables, { isDryRun: options.isDryRun })
 
       while (!actionOutput.success && attempts < maxRetries) {
         attempts++
         // Exponential backoff: 50ms, 100ms, 200ms
         await new Promise((resolve) => setTimeout(resolve, Math.min(50 * Math.pow(2, attempts), 500)))
-        actionOutput = await executeActionNode(node, variables)
+        actionOutput = await executeActionNode(node, variables, { isDryRun: options.isDryRun })
       }
 
       const stepDuration = Date.now() - stepStart

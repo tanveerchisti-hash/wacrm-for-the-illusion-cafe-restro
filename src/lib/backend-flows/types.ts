@@ -51,6 +51,7 @@ export interface BackendFlowMetadata {
   alert_on_failure?: boolean
   description_extended?: string
   tags?: string[]
+  is_paused?: boolean
 }
 
 export interface BackendFlow {

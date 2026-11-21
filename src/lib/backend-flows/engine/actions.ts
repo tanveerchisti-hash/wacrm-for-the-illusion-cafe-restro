@@ -78,12 +78,17 @@ export interface ActionExecutionOutput {
   error?: string
 }
 
+export interface ActionExecutionOptions {
+  isDryRun?: boolean
+}
+
 /**
  * Executes a single action node with variable context.
  */
 export async function executeActionNode(
   node: BackendFlowNode,
-  vars: Record<string, unknown>
+  vars: Record<string, unknown>,
+  options?: ActionExecutionOptions
 ): Promise<ActionExecutionOutput> {
   const data = node.data || {}
   const subType = (data.subType as string) || 'whatsapp_message'
@@ -95,9 +100,10 @@ export async function executeActionNode(
       return {
         success: true,
         data: {
-          delivered: true,
+          delivered: !options?.isDryRun,
+          simulated: !!options?.isDryRun,
           formattedMessage,
-          to: vars.customerPhone || vars.phone,
+          to: vars.customerPhone || vars.phone || '+91XXXXXXXXXX',
         },
       }
     }
@@ -108,7 +114,8 @@ export async function executeActionNode(
       return {
         success: true,
         data: {
-          synced: true,
+          synced: !options?.isDryRun,
+          simulated: !!options?.isDryRun,
           kitchenStatus,
           prepTimeMinutes,
           updatedAt: new Date().toISOString(),
@@ -123,6 +130,7 @@ export async function executeActionNode(
         success: true,
         data: {
           verified: true,
+          simulated: !!options?.isDryRun,
           isPaid,
           paymentMethod: order.payment_method || 'upi',
         },
@@ -138,6 +146,18 @@ export async function executeActionNode(
       }
 
       const url = interpolateString(rawUrl, vars)
+
+      if (options?.isDryRun) {
+        return {
+          success: true,
+          data: {
+            simulated: true,
+            method,
+            url,
+            note: 'Dry-run simulation: external HTTP request skipped',
+          },
+        }
+      }
 
       // SSRF Security Validation
       const isDeliverable = await isDeliverableUrl(url).catch(() => false)

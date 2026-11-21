@@ -15,6 +15,9 @@ import {
   Sparkles,
   Play,
   Activity,
+  FlaskConical,
+  PauseCircle,
+  Eye,
 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { GatedButton } from '@/components/ui/gated-button'
@@ -53,6 +56,8 @@ import {
 import { useAuth } from '@/hooks/use-auth'
 import { FlowStatusBadge } from '@/components/backend-flows/flow-status-badge'
 import { BackendFlowCanvas } from '@/components/backend-flows/canvas/backend-flow-canvas'
+import { SimulatorModal } from '@/components/backend-flows/canvas/simulator-modal'
+import { RunTraceDrawer } from '@/components/backend-flows/run-trace-drawer'
 import {
   canPublishBackendFlow,
   canEditBackendFlow,
@@ -63,18 +68,9 @@ import type {
   BackendFlowTriggerType,
   BackendFlowVersion,
   BackendFlowDefinition,
+  BackendFlowRun,
 } from '@/lib/backend-flows/types'
 import type { CanvasValidationResult } from '@/lib/backend-flows/canvas-types'
-
-interface RunRecord {
-  id: string
-  version_number: number
-  triggered_by: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'timed_out'
-  duration_ms?: number
-  error_message?: string
-  created_at: string
-}
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -89,12 +85,17 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
 
   const [flow, setFlow] = useState<BackendFlow | null>(null)
   const [versions, setVersions] = useState<BackendFlowVersion[]>([])
-  const [runs, setRuns] = useState<RunRecord[]>([])
+  const [runs, setRuns] = useState<BackendFlowRun[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [runningTest, setRunningTest] = useState(false)
+  const [rollingBack, setRollingBack] = useState(false)
+  const [pausing, setPausing] = useState(false)
   const [publishDialogOpen, setPublishDialogOpen] = useState(false)
+  const [simulatorOpen, setSimulatorOpen] = useState(false)
+  const [selectedRun, setSelectedRun] = useState<BackendFlowRun | null>(null)
+  const [traceDrawerOpen, setTraceDrawerOpen] = useState(false)
   const [changeSummary, setChangeSummary] = useState('')
 
   // Form State
@@ -305,6 +306,75 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
     }
   }
 
+  const handleTogglePause = async () => {
+    if (!flow) return
+    const currentlyPaused = flow.metadata?.is_paused === true
+    setPausing(true)
+    try {
+      const res = await fetch(`/api/backend-flows/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          metadata: {
+            ...flow.metadata,
+            is_paused: !currentlyPaused,
+          },
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to update activation status')
+      setFlow(data.flow)
+      toast.success(
+        currentlyPaused
+          ? 'Workflow resumed. Triggers are now active in production.'
+          : 'Emergency pause active. All production triggers are now bypassed.'
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setPausing(false)
+    }
+  }
+
+  const handleRollback = async (versionNumber: number) => {
+    if (
+      !confirm(
+        `Are you sure you want to rollback to release v${versionNumber}? This will restore its configuration as a new draft.`
+      )
+    ) {
+      return
+    }
+
+    setRollingBack(true)
+    try {
+      const res = await fetch(`/api/backend-flows/${id}/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version_number: versionNumber }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Rollback failed')
+
+      const updated: BackendFlow = data.flow
+      setFlow(updated)
+      setName(updated.name)
+      setSlug(updated.slug)
+      setDescription(updated.description || '')
+      setCategory(updated.category)
+      setTriggerType(updated.trigger_type)
+      setTriggerConfigStr(JSON.stringify(updated.trigger_config || {}, null, 2))
+      const def = updated.definition || { nodes: [], edges: [] }
+      setCanvasDefinition(def)
+      setDefinitionStr(JSON.stringify(def, null, 2))
+      toast.success(`Successfully rolled back to v${versionNumber} as draft v${updated.current_version}!`)
+      loadVersions()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Rollback failed')
+    } finally {
+      setRollingBack(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -340,6 +410,11 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold tracking-tight">{flow.name}</h1>
               <FlowStatusBadge status={flow.status} version={flow.published_version} />
+              {flow.metadata?.is_paused && (
+                <Badge variant="destructive" className="bg-amber-500/10 text-amber-400 border-amber-500/30 text-xs">
+                  PAUSED
+                </Badge>
+              )}
               <Badge variant="outline" className="font-mono text-xs">
                 Draft: v{flow.current_version}
               </Badge>
@@ -359,12 +434,49 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
             </Button>
           )}
 
+          {/* Emergency Pause / Resume safety switch */}
+          {flow.status === 'published' && (
+            <GatedButton
+              canAct={canPublish}
+              gateReason="toggle emergency pause"
+              onClick={handleTogglePause}
+              disabled={pausing}
+              variant="outline"
+              size="sm"
+              className={`flex items-center gap-1.5 ${
+                flow.metadata?.is_paused
+                  ? 'border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10'
+                  : 'border-amber-500/40 text-amber-400 hover:bg-amber-500/10'
+              }`}
+            >
+              {pausing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : flow.metadata?.is_paused ? (
+                <Play className="h-3.5 w-3.5 text-emerald-400" />
+              ) : (
+                <PauseCircle className="h-3.5 w-3.5 text-amber-400" />
+              )}
+              {flow.metadata?.is_paused ? 'Resume Flow' : 'Pause Flow'}
+            </GatedButton>
+          )}
+
+          {/* Safe Dry-run Simulator */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setSimulatorOpen(true)}
+            className="flex items-center gap-1.5"
+          >
+            <FlaskConical className="h-3.5 w-3.5 text-primary" />
+            Simulator
+          </Button>
+
           <GatedButton
             canAct={canEdit}
             gateReason="test run workflows"
             onClick={handleTestRun}
             disabled={runningTest || saving}
-            variant="secondary"
+            variant="outline"
             size="sm"
             className="flex items-center gap-1.5"
           >
@@ -584,6 +696,7 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
                     setDefinitionStr(JSON.stringify(newDef, null, 2))
                   }}
                   onValidationChange={setCanvasValidation}
+                  onOpenSimulator={() => setSimulatorOpen(true)}
                   disabled={!canEdit}
                 />
               ) : (
@@ -650,8 +763,26 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
                         </p>
                       </div>
 
-                      <div className="text-right text-xs text-muted-foreground">
-                        <div>{new Date(v.created_at).toLocaleString()}</div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right text-xs text-muted-foreground">
+                          <div>{new Date(v.created_at).toLocaleString()}</div>
+                        </div>
+                        {canEdit && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRollback(v.version_number)}
+                            disabled={rollingBack}
+                            className="h-7 text-xs gap-1"
+                          >
+                            {rollingBack ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <RotateCcw className="h-3 w-3" />
+                            )}
+                            Rollback
+                          </Button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -721,12 +852,26 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
                           )}
                         </div>
 
-                        <div className="flex sm:flex-col items-center sm:items-end justify-between text-xs text-muted-foreground">
-                          {r.duration_ms !== undefined && (
-                            <span className="font-mono text-foreground">
-                              {r.duration_ms} ms
-                            </span>
-                          )}
+                        <div className="flex sm:flex-col items-center sm:items-end justify-between gap-2 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-2">
+                            {r.duration_ms !== undefined && (
+                              <span className="font-mono text-foreground">
+                                {r.duration_ms} ms
+                              </span>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2.5 text-xs gap-1 text-primary hover:text-primary"
+                              onClick={() => {
+                                setSelectedRun(r)
+                                setTraceDrawerOpen(true)
+                              }}
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                              View Trace
+                            </Button>
+                          </div>
                           <span>{new Date(r.created_at).toLocaleString()}</span>
                         </div>
                       </div>
@@ -774,6 +919,21 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Safe Dry-run Simulator Modal (4.1) */}
+      <SimulatorModal
+        open={simulatorOpen}
+        onOpenChange={setSimulatorOpen}
+        flowId={flow.id}
+        flowName={flow.name}
+      />
+
+      {/* Execution Run Trace Drawer (4.2 & 4.3) */}
+      <RunTraceDrawer
+        open={traceDrawerOpen}
+        onOpenChange={setTraceDrawerOpen}
+        run={selectedRun}
+      />
     </div>
   )
 }

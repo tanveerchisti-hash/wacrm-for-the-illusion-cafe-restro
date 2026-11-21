@@ -47,6 +47,20 @@ describe('Backend Flow Trigger Matcher', () => {
     expect(matchesTrigger(baseFlow, event)).toBe(false)
   })
 
+  it('bypasses execution if workflow is paused (emergency activation safety)', () => {
+    const pausedFlow: BackendFlow = {
+      ...baseFlow,
+      metadata: { is_paused: true },
+    }
+    const event: BackendFlowEvent = {
+      accountId: 'acc-123',
+      type: 'order_event',
+      event: 'order.created',
+      payload: { id: 'ord-1' },
+    }
+    expect(matchesTrigger(pausedFlow, event)).toBe(false)
+  })
+
   it('rejects draft workflows in production mode', () => {
     const draftFlow: BackendFlow = {
       ...baseFlow,

@@ -43,6 +43,7 @@ interface BackendFlowCanvasProps {
   initialDefinition?: BackendFlowDefinition
   onChange: (definition: BackendFlowDefinition) => void
   onValidationChange?: (result: CanvasValidationResult) => void
+  onOpenSimulator?: () => void
   disabled?: boolean
 }
 
@@ -50,6 +51,7 @@ function BackendFlowCanvasInner({
   initialDefinition,
   onChange,
   onValidationChange,
+  onOpenSimulator,
   disabled,
 }: BackendFlowCanvasProps) {
   const { fitView } = useReactFlow()
@@ -307,6 +309,7 @@ function BackendFlowCanvasInner({
       <CanvasToolbar
         onAddNode={handleAddNode}
         onAutoLayout={handleAutoLayout}
+        onOpenSimulator={onOpenSimulator}
         validation={validation}
         disabled={disabled}
       />
