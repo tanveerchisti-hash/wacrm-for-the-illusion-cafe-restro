@@ -4,7 +4,6 @@ import { buildConversationContext } from './context'
 import { getActiveOrderingSession } from '@/lib/ordering/session-timeout'
 import {
   getActiveTrialOrder,
-  createTrialOrder,
   extractOrderConfirmedMarker,
 } from '@/lib/restaurant/order-trial'
 import { isRestaurantTrialEnabled } from '@/lib/restaurant/feature-flag'
@@ -169,11 +168,21 @@ export async function dispatchInboundToAiReply(
       latestUserMessage(messages),
     )
 
+    const restaurantTrialEnabled = isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
-    })
+    }) + (restaurantTrialEnabled
+      ? '\n\nRestaurant trial checkout is controlled by the CRM, NOT by you. ' +
+        'While discussing menu items, summarize names, quantities, unit prices and food subtotal, ' +
+        'then ask the customer to reply 1 to confirm or request an edit. ' +
+        'NEVER ask for Delivery/Takeaway, location, address, payment, or a phone number until ' +
+        'the kitchen has explicitly accepted a persisted order in the CRM. ' +
+        'Do not claim the order was submitted to the kitchen or accepted; only the server can do that. ' +
+        'If you cannot verify a menu item from supplied business information, ask for clarification ' +
+        'rather than declaring an item unavailable or inventing a price.'
+      : '')
 
     const { text, handoff, usage } = await generateReply({
       config,
@@ -253,25 +262,20 @@ export async function dispatchInboundToAiReply(
     if (claimed !== true) return
 
     let replyText = text
-    if (isRestaurantTrialEnabled({ accountId, phoneNumberId, scope: 'inbound' })) {
-      try {
-        const { cleanText, payload } = extractOrderConfirmedMarker(text)
-        if (payload && payload.items.length > 0) {
-          const newOrder = await createTrialOrder(db, {
-            accountId,
-            contactId,
-            conversationId,
-            orderingSessionId: activeOrderingSession?.id,
-            items: payload.items,
-            subtotal: payload.subtotal,
-          })
-          replyText =
-            cleanText ||
-            `⏳ Your order *#${newOrder.order_number}* has been sent to our kitchen for confirmation ` +
-              `(target response: 2–3 minutes). Please wait while our chef reviews your order!`
+    if (restaurantTrialEnabled) {
+      // A model-generated ORDER_CONFIRMED marker is NOT proof of customer
+      // confirmation. Only the deterministic inbound confirmation handler
+      // may create pending_kitchen orders.
+      const { cleanText } = extractOrderConfirmedMarker(replyText)
+      replyText = cleanText || 'Please reply 1 to confirm your order summary.'
+
+      // Some account-specific AI prompts asked Delivery/Takeaway prematurely.
+      // Keep the summary and confirmation options; discard that extra question.
+      if (/order\s+summary/i.test(replyText) && /confirm\s+details/i.test(replyText)) {
+        const cancelOption = /(?:^|\n)[^\n]*cancel\s+(?:enquiry|order)[^\n]*/im.exec(replyText)
+        if (cancelOption && cancelOption.index !== undefined) {
+          replyText = replyText.slice(0, cancelOption.index + cancelOption[0].length).trim()
         }
-      } catch (orderErr) {
-        console.warn('[ai auto-reply] trial order creation hook error:', orderErr)
       }
     }
 

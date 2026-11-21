@@ -61,6 +61,7 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
       expect(isOrderConfirmationPhrase('confirm details')).toBe(true)
       expect(isOrderConfirmationPhrase('yes confirm')).toBe(true)
       expect(isOrderConfirmationPhrase('yes confirm order')).toBe(true)
+      expect(isOrderConfirmationPhrase('Yes confirm this')).toBe(true)
       expect(isOrderConfirmationPhrase('place order')).toBe(true)
 
       // Hinglish / Hindi variants
@@ -84,6 +85,44 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
   })
 
   describe('Bug 3: Real order parsing and removal of hardcoded fallback', () => {
+    it('parses the exact two-line WhatsApp order summary shown in real testing', () => {
+      const summary = [
+        '🍽️ ILLUSION CAFE & RESTAURANT',
+        '🧾 Your Order Summary',
+        '🍕 1 × Chicken Pizza (7-inch)',
+        '₹149 × 1 = ₹149',
+        '☕ 2 × Cold Coffee (200 ml)',
+        '₹99 × 2 = ₹198',
+        '💰 Food Subtotal: ₹347',
+        '🚚 Delivery Charge: FREE (₹300+)',
+        '💳 Estimated Total: ₹347',
+        "What's Next?",
+        '1 Confirm Details',
+        '2 Add More Items',
+        '3 Remove an Item',
+        '4 Cancel Enquiry',
+      ].join('\n')
+
+      expect(parseSummaryFromText(summary)).toEqual({
+        items: [
+          { name: 'Chicken Pizza (7-inch)', quantity: 1, unit_price: 149, total_price: 149 },
+          { name: 'Cold Coffee (200 ml)', quantity: 2, unit_price: 99, total_price: 198 },
+        ],
+        subtotal: 347,
+      })
+    })
+
+    it('refuses a misleading subtotal rather than creating a wrongly priced order', () => {
+      const summary = [
+        'Your Order Summary',
+        '🍕 1 × Chicken Pizza (7-inch)',
+        '₹149 × 1 = ₹149',
+        'Food Subtotal: ₹999',
+        '1 Confirm Details',
+      ].join('\n')
+      expect(parseSummaryFromText(summary)).toBeNull()
+    })
+
     it('parses real Illusion Cafe order summaries with multiple quantities and prices', () => {
       const summaryText =
         `Here is your order summary:\n` +

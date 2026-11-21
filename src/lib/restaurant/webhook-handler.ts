@@ -44,6 +44,11 @@ export function isOrderConfirmationPhrase(text: string): boolean {
     return true
   }
 
+  // Natural response after a confirmation request (not just an exact menu option).
+  if (/^(?:yes|yeah|haan?|ji)(?:[,\s]+)(?:please\s+)?confirm(?:\s+(?:this|it|order|details|this\s+order))?\.?$/i.test(trimmed)) {
+    return true
+  }
+
   return false
 }
 
@@ -66,6 +71,8 @@ export function parseSummaryFromText(summaryText: string): {
   const lines = summaryText.split('\n').map((l) => l.trim()).filter(Boolean)
   const items: TrialOrderItem[] = []
   let subtotal = 0
+  let foodSubtotalSeen = false
+  let pendingTwoLineItem: { name: string; quantity: number } | null = null
 
   // Filter out non-food menu options presented to customer
   const ignoredOptionPatterns = [
@@ -83,6 +90,49 @@ export function parseSummaryFromText(summaryText: string): {
   ]
 
   for (const line of lines) {
+    // The actual WhatsApp summary uses a two-line layout:
+    // "🍕 1 × Chicken Pizza (7-inch)" then "₹149 × 1 = ₹149".
+    // The old one-line regexp silently skipped both lines, leaving no kitchen order.
+    const normalizedLine = line.replace(/[*_]/g, '').trim()
+    const formula = normalizedLine.match(/^₹\s*([\d,]+(?:\.\d+)?)\s*[xX×]\s*(\d+)\s*=\s*₹\s*([\d,]+(?:\.\d+)?)$/u)
+    if (formula) {
+      if (pendingTwoLineItem) {
+        const unitPrice = Number(formula[1].replace(/,/g, ''))
+        const priceQuantity = Number(formula[2])
+        const totalPrice = Number(formula[3].replace(/,/g, ''))
+        if (
+          priceQuantity !== pendingTwoLineItem.quantity ||
+          !Number.isFinite(totalPrice) ||
+          !Number.isFinite(unitPrice) ||
+          Math.abs(unitPrice * priceQuantity - totalPrice) > 0.01
+        ) {
+          return null // Fail closed instead of charging the wrong amount.
+        }
+        items.push({
+          name: pendingTwoLineItem.name,
+          quantity: priceQuantity,
+          unit_price: unitPrice,
+          total_price: totalPrice,
+        })
+      }
+      pendingTwoLineItem = null
+      continue
+    }
+
+    // Remove emoji/bullet prefix from numbered item header, without removing
+    // size descriptions such as "(7-inch)" or "(200 ml)" from the name.
+    const itemHeader = normalizedLine
+      .replace(/^[^A-Za-z0-9]+/u, '')
+      .match(/^(\d+)\s*[xX×]\s+([^₹=]+)$/u)
+    if (itemHeader) {
+      pendingTwoLineItem = {
+        quantity: Number(itemHeader[1]),
+        name: itemHeader[2].trim(),
+      }
+      continue
+    }
+    pendingTwoLineItem = null
+
     // 1. Skip non-item option lines
     if (ignoredOptionPatterns.some((pattern) => pattern.test(line))) {
       continue
@@ -95,7 +145,12 @@ export function parseSummaryFromText(summaryText: string): {
     if (totalMatch) {
       const parsedTotal = parseFloat(totalMatch[1])
       if (parsedTotal > 0) {
-        subtotal = parsedTotal
+        if (/food\s*subtotal/i.test(line)) {
+          subtotal = parsedTotal
+          foodSubtotalSeen = true
+        } else if (!foodSubtotalSeen) {
+          subtotal = parsedTotal
+        }
       }
       continue
     }
@@ -156,11 +211,11 @@ export function parseSummaryFromText(summaryText: string): {
   }
 
   if (items.length === 0) return null
-  if (subtotal === 0) {
-    subtotal = items.reduce((acc, i) => acc + i.total_price, 0)
+  const calculatedSubtotal = Math.round(items.reduce((acc, item) => acc + item.total_price, 0) * 100) / 100
+  if (subtotal > 0 && Math.abs(subtotal - calculatedSubtotal) > 0.01) {
+    return null // Summary and item totals disagree; do not create an incorrect order.
   }
-
-  return { items, subtotal }
+  return { items, subtotal: subtotal || calculatedSubtotal }
 }
 
 /**
@@ -367,14 +422,20 @@ export async function handleRestaurantTrialInbound(
       .eq('conversation_id', conversationId)
       .eq('sender_type', 'bot')
       .order('created_at', { ascending: false })
-      .limit(5)
+      .limit(12)
 
     let parsedSummary: { items: TrialOrderItem[]; subtotal: number } | null = null
 
     for (const msg of recentMsgs ?? []) {
-      if (msg.content_text) {
-        parsedSummary = parseSummaryFromText(msg.content_text)
-        if (parsedSummary && parsedSummary.items.length > 0) break
+      const summaryText = msg.content_text || ''
+      // Require an actual order summary, not a previous conversational mention
+      // of a price. "1" must never create an order from an unrelated message.
+      if (
+        /(?:your\s+order\s+summary|order\s+(?:summary|details))/i.test(summaryText) &&
+        /(?:confirm\s+details|confirm\s+order|reply\s+1\s+to\s+confirm)/i.test(summaryText)
+      ) {
+        parsedSummary = parseSummaryFromText(summaryText)
+        if (parsedSummary) break
       }
     }
 
