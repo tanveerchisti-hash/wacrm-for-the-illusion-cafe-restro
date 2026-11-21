@@ -32,7 +32,8 @@ export const CosmicCanvasBackground = memo(function CosmicCanvasBackground({
 }: CosmicCanvasBackgroundProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const [videoFailed, setVideoFailed] = useState(false)
+  const [failedTheme, setFailedTheme] = useState<string | null>(null)
+  const videoFailed = failedTheme === settings.theme
 
   // 1. Manage Playback Rate according to user speed setting
   useEffect(() => {
@@ -102,6 +103,12 @@ export const CosmicCanvasBackground = memo(function CosmicCanvasBackground({
     }
   }, [settings.enabled, settings.useStaticOnly])
 
+  const isMilkyWay = settings.theme === 'milky-way'
+  const webmSrc = isMilkyWay ? '/wallpapers/milky-way.webm' : '/wallpapers/sagittarius-a.webm'
+  const mp4Src = isMilkyWay ? '/wallpapers/milky-way.mp4' : '/wallpapers/sagittarius-a.mp4'
+  const posterSrc = isMilkyWay ? '/wallpapers/milky-way-poster.jpg' : '/wallpapers/sagittarius-a-poster.jpg'
+  const posterAlt = isMilkyWay ? 'Milky Way Galaxy Cosmic Background' : 'Sagittarius A* Cosmic Background'
+
   // If cosmic wallpaper is disabled by user, do not render decorative background
   if (!settings.enabled) {
     return null
@@ -117,6 +124,7 @@ export const CosmicCanvasBackground = memo(function CosmicCanvasBackground({
       {/* Layer 1: Hardware-accelerated Video / Static Poster */}
       {!settings.useStaticOnly && !videoFailed ? (
         <video
+          key={settings.theme}
           ref={videoRef}
           data-testid="cosmic-canvas-video"
           autoPlay
@@ -124,22 +132,23 @@ export const CosmicCanvasBackground = memo(function CosmicCanvasBackground({
           loop
           playsInline
           preload="auto"
-          poster="/wallpapers/sagittarius-a-poster.jpg"
+          poster={posterSrc}
           onError={() => {
             console.warn('[cosmic-canvas] Video source error, falling back to static poster.')
-            setVideoFailed(true)
+            setFailedTheme(settings.theme)
           }}
           className="w-full h-full object-cover object-center will-change-transform scale-[1.02] filter contrast-[1.05]"
         >
-          <source src="/wallpapers/sagittarius-a.webm" type="video/webm" />
-          <source src="/wallpapers/sagittarius-a.mp4" type="video/mp4" />
+          <source src={webmSrc} type="video/webm" />
+          <source src={mp4Src} type="video/mp4" />
         </video>
       ) : (
         /* Static poster fallback for reduced-motion or video load failure */
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src="/wallpapers/sagittarius-a-poster.jpg"
-          alt="Sagittarius A* Cosmic Background"
+          key={settings.theme}
+          src={posterSrc}
+          alt={posterAlt}
           data-testid="cosmic-canvas-poster"
           className="w-full h-full object-cover object-center will-change-transform filter contrast-[1.05]"
         />

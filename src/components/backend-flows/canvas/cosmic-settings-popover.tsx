@@ -52,7 +52,7 @@ export function CosmicSettingsPopover({
             <div className="flex items-center gap-2">
               <Orbit className="h-4 w-4 text-amber-400" />
               <PopoverTitle className="text-sm font-semibold">
-                Sagittarius A* Wallpaper
+                Cosmic Canvas Wallpaper
               </PopoverTitle>
             </div>
             <Badge variant="outline" className="text-[10px] font-mono border-amber-500/30 text-amber-400">
@@ -60,7 +60,7 @@ export function CosmicSettingsPopover({
             </Badge>
           </div>
           <p className="text-[11px] text-muted-foreground mt-0.5">
-            Cinematic Milky Way supermassive black hole visualizer.
+            Cinematic space visualizer for workflow canvas.
           </p>
         </PopoverHeader>
 
@@ -71,7 +71,7 @@ export function CosmicSettingsPopover({
               Enable Wallpaper
             </Label>
             <p className="text-[10px] text-muted-foreground">
-              Renders live cosmic accretion disk behind nodes
+              Renders live cosmic animation behind canvas nodes
             </p>
           </div>
           <Switch
@@ -83,7 +83,42 @@ export function CosmicSettingsPopover({
 
         {settings.enabled && (
           <div className="space-y-3 pt-1 border-t">
-            {/* Setting 2: Dark Contrast Overlay (Brightness) */}
+            {/* Setting 2: Celestial Theme Selector */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Celestial Wallpaper Theme</Label>
+              <div className="grid grid-cols-2 gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={settings.theme === 'sagittarius-a' ? 'secondary' : 'outline'}
+                  className={`h-8 text-xs justify-start px-2 gap-1.5 ${
+                    settings.theme === 'sagittarius-a'
+                      ? 'border-amber-500/40 text-amber-400 font-semibold bg-amber-500/10'
+                      : 'text-muted-foreground'
+                  }`}
+                  onClick={() => onUpdate({ theme: 'sagittarius-a' })}
+                >
+                  <Orbit className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                  <span className="truncate">Sagittarius A*</span>
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={settings.theme === 'milky-way' ? 'secondary' : 'outline'}
+                  className={`h-8 text-xs justify-start px-2 gap-1.5 ${
+                    settings.theme === 'milky-way'
+                      ? 'border-purple-500/40 text-purple-400 font-semibold bg-purple-500/10'
+                      : 'text-muted-foreground'
+                  }`}
+                  onClick={() => onUpdate({ theme: 'milky-way' })}
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                  <span className="truncate">Milky Way</span>
+                </Button>
+              </div>
+            </div>
+
+            {/* Setting 3: Dark Contrast Overlay (Brightness) */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs">
                 <Label htmlFor="cosmic-opacity-slider" className="text-xs font-medium">

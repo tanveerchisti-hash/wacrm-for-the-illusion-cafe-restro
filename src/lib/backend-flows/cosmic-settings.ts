@@ -1,6 +1,10 @@
+export type CosmicTheme = 'sagittarius-a' | 'milky-way'
+
 export interface CosmicWallpaperSettings {
-  /** Whether the Sagittarius A* cosmic wallpaper is active */
+  /** Whether the cosmic wallpaper is active */
   enabled: boolean
+  /** Active celestial wallpaper theme */
+  theme: CosmicTheme
   /** Dark contrast overlay opacity (0.2 to 0.9, default 0.65 = 65%) */
   darkOverlayOpacity: number
   /** Video playback animation speed multiplier (0.5x, 1.0x, 1.5x) */
@@ -15,6 +19,7 @@ export const COSMIC_SETTINGS_STORAGE_KEY = 'wacrm_cosmic_canvas_settings'
 
 export const DEFAULT_COSMIC_SETTINGS: CosmicWallpaperSettings = {
   enabled: true,
+  theme: 'sagittarius-a',
   darkOverlayOpacity: 0.65,
   animationSpeed: 1.0,
   showDots: false,
@@ -48,6 +53,10 @@ export function loadCosmicSettings(): CosmicWallpaperSettings {
 
     return {
       enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_COSMIC_SETTINGS.enabled,
+      theme:
+        parsed.theme === 'milky-way' || parsed.theme === 'sagittarius-a'
+          ? parsed.theme
+          : DEFAULT_COSMIC_SETTINGS.theme,
       darkOverlayOpacity:
         typeof parsed.darkOverlayOpacity === 'number' &&
         parsed.darkOverlayOpacity >= 0.1 &&

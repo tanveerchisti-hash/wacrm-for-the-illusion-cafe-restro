@@ -66,6 +66,7 @@ describe('Cosmic Canvas (Sagittarius A* Live Wallpaper) Suite', () => {
     it('returns default settings when localStorage is empty', () => {
       const settings = loadCosmicSettings()
       expect(settings.enabled).toBe(true)
+      expect(settings.theme).toBe('sagittarius-a')
       expect(settings.darkOverlayOpacity).toBe(0.65)
       expect(settings.animationSpeed).toBe(1.0)
       expect(settings.showDots).toBe(false)
@@ -75,6 +76,7 @@ describe('Cosmic Canvas (Sagittarius A* Live Wallpaper) Suite', () => {
     it('persists and retrieves custom settings safely from localStorage', () => {
       const custom: CosmicWallpaperSettings = {
         enabled: true,
+        theme: 'milky-way',
         darkOverlayOpacity: 0.8,
         animationSpeed: 1.5,
         showDots: true,
@@ -84,6 +86,7 @@ describe('Cosmic Canvas (Sagittarius A* Live Wallpaper) Suite', () => {
       saveCosmicSettings(custom)
       const loaded = loadCosmicSettings()
 
+      expect(loaded.theme).toBe('milky-way')
       expect(loaded.darkOverlayOpacity).toBe(0.8)
       expect(loaded.animationSpeed).toBe(1.5)
       expect(loaded.showDots).toBe(true)
@@ -145,6 +148,40 @@ describe('Cosmic Canvas (Sagittarius A* Live Wallpaper) Suite', () => {
       expect(markup).toContain('/wallpapers/sagittarius-a.webm')
       expect(markup).toContain('/wallpapers/sagittarius-a.mp4')
       expect(markup).toContain('poster="/wallpapers/sagittarius-a-poster.jpg"')
+    })
+
+    it('renders Milky Way video assets when theme is set to milky-way', () => {
+      const markup = renderToStaticMarkup(
+        React.createElement(CosmicCanvasBackground, {
+          settings: {
+            ...DEFAULT_COSMIC_SETTINGS,
+            enabled: true,
+            theme: 'milky-way',
+            useStaticOnly: false,
+          },
+        })
+      )
+
+      expect(markup).toContain('/wallpapers/milky-way.webm')
+      expect(markup).toContain('/wallpapers/milky-way.mp4')
+      expect(markup).toContain('poster="/wallpapers/milky-way-poster.jpg"')
+    })
+
+    it('renders Milky Way static poster when theme is milky-way and useStaticOnly is true', () => {
+      const markup = renderToStaticMarkup(
+        React.createElement(CosmicCanvasBackground, {
+          settings: {
+            ...DEFAULT_COSMIC_SETTINGS,
+            enabled: true,
+            theme: 'milky-way',
+            useStaticOnly: true,
+          },
+        })
+      )
+
+      expect(markup).toContain('src="/wallpapers/milky-way-poster.jpg"')
+      expect(markup).toContain('alt="Milky Way Galaxy Cosmic Background"')
+      expect(markup).not.toContain('<video')
     })
 
     it('renders static poster image when useStaticOnly is true', () => {
