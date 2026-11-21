@@ -29,6 +29,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { CanvasValidationResult } from '@/lib/backend-flows/canvas-types'
+import type { CosmicWallpaperSettings } from '@/lib/backend-flows/cosmic-settings'
+import { CosmicSettingsPopover } from './cosmic-settings-popover'
 
 interface CanvasToolbarProps {
   onAddNode: (type: 'trigger' | 'action' | 'condition', subType: string, label: string) => void
@@ -36,6 +38,9 @@ interface CanvasToolbarProps {
   onOpenSimulator?: () => void
   validation: CanvasValidationResult
   disabled?: boolean
+  cosmicSettings?: CosmicWallpaperSettings
+  onUpdateCosmicSettings?: (settings: Partial<CosmicWallpaperSettings>) => void
+  onResetCosmicSettings?: () => void
 }
 
 export function CanvasToolbar({
@@ -44,6 +49,9 @@ export function CanvasToolbar({
   onOpenSimulator,
   validation,
   disabled,
+  cosmicSettings,
+  onUpdateCosmicSettings,
+  onResetCosmicSettings,
 }: CanvasToolbarProps) {
   const hasErrors = validation.errors.length > 0
   const hasWarnings = validation.warnings.length > 0
@@ -175,6 +183,15 @@ export function CanvasToolbar({
             <FlaskConical className="h-3.5 w-3.5 text-primary" />
             <span>Simulator</span>
           </Button>
+        )}
+
+        {cosmicSettings && onUpdateCosmicSettings && onResetCosmicSettings && (
+          <CosmicSettingsPopover
+            settings={cosmicSettings}
+            onUpdate={onUpdateCosmicSettings}
+            onReset={onResetCosmicSettings}
+            disabled={disabled}
+          />
         )}
       </div>
 

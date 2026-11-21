@@ -25,8 +25,15 @@ import { ActionNode } from './nodes/action-node'
 import { ConditionNode } from './nodes/condition-node'
 import { CanvasToolbar } from './canvas-toolbar'
 import { NodeConfigDrawer } from './node-config-drawer'
+import { CosmicCanvasBackground } from './cosmic-canvas-background'
 import { validateCanvasDefinition } from '@/lib/backend-flows/canvas-validation'
 import { autoLayout } from '@/lib/flows/layout'
+import {
+  loadCosmicSettings,
+  saveCosmicSettings,
+  DEFAULT_COSMIC_SETTINGS,
+  type CosmicWallpaperSettings,
+} from '@/lib/backend-flows/cosmic-settings'
 import type {
   BackendFlowDefinition,
   BackendFlowNode,
@@ -82,6 +89,27 @@ function BackendFlowCanvasInner({
   // Selected node for config drawer
   const [selectedNode, setSelectedNode] = useState<BackendFlowNode | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
+
+  // Cosmic Wallpaper visual settings
+  const [cosmicSettings, setCosmicSettings] = useState<CosmicWallpaperSettings>(() =>
+    loadCosmicSettings()
+  )
+
+  const handleUpdateCosmicSettings = useCallback(
+    (partial: Partial<CosmicWallpaperSettings>) => {
+      setCosmicSettings((prev) => {
+        const next = { ...prev, ...partial }
+        saveCosmicSettings(next)
+        return next
+      })
+    },
+    []
+  )
+
+  const handleResetCosmicSettings = useCallback(() => {
+    setCosmicSettings(DEFAULT_COSMIC_SETTINGS)
+    saveCosmicSettings(DEFAULT_COSMIC_SETTINGS)
+  }, [])
 
   // Validation state
   const validation = useMemo(() => {
@@ -312,10 +340,17 @@ function BackendFlowCanvasInner({
         onOpenSimulator={onOpenSimulator}
         validation={validation}
         disabled={disabled}
+        cosmicSettings={cosmicSettings}
+        onUpdateCosmicSettings={handleUpdateCosmicSettings}
+        onResetCosmicSettings={handleResetCosmicSettings}
       />
 
-      {/* Main ReactFlow Canvas */}
-      <div className="flex-1 w-full h-full relative">
+      {/* Main ReactFlow Canvas Viewport */}
+      <div className="flex-1 w-full h-full relative overflow-hidden">
+        {/* Layer 1 & 2: Dedicated Cosmic Background & Contrast Overlay */}
+        <CosmicCanvasBackground settings={cosmicSettings} />
+
+        {/* Layer 3 & 4: Interactive Nodes, Connectors, Controls & MiniMap */}
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -329,9 +364,16 @@ function BackendFlowCanvasInner({
           minZoom={0.2}
           maxZoom={1.5}
           proOptions={{ hideAttribution: true }}
-          className="bg-muted/10"
+          className={cosmicSettings.enabled ? 'bg-transparent' : 'bg-muted/10'}
         >
-          <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
+          {(!cosmicSettings.enabled || cosmicSettings.showDots) && (
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={16}
+              size={1}
+              className={cosmicSettings.enabled ? '!opacity-35' : '!opacity-100'}
+            />
+          )}
           <Controls className="!bg-card !border-border !text-foreground" />
           <MiniMap
             nodeStrokeWidth={3}
