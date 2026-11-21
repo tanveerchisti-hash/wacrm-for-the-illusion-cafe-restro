@@ -84,7 +84,7 @@ export const DEFAULT_TRIAL_SETTINGS: Omit<RestaurantTrialSettings, 'accountId'> 
   restaurantName: 'The Illusion Cafe & Restaurant',
   restaurantAddress: 'The Illusion Cafe & Restaurant, Main Market / Station Road',
   pickupInstructions: 'Please collect your order at the counter when notified.',
-  deliveryFee: 40.0,
+  deliveryFee: 20.0,
   testUpiId: 'test-illusioncafe@upi',
   testQrCodeUrl: null,
   defaultPrepMinutes: 15,
@@ -416,6 +416,18 @@ export async function rejectKitchenOrder(
 }
 
 /**
+ * Calculate delivery fee based on the restaurant's official policy:
+ * - Orders of ₹300 or above: FREE delivery (₹0.00)
+ * - Orders below ₹300: ₹20.00 delivery fee (or configured fee)
+ */
+export function calculateDeliveryFee(subtotal: number, baseFee: number = 20): number {
+  if (subtotal >= 300) {
+    return 0.0
+  }
+  return baseFee > 0 ? baseFee : 20.0
+}
+
+/**
  * Update fulfilment method (Delivery or Takeaway) and transition to payment_pending.
  */
 export async function updateOrderFulfilment(
@@ -441,7 +453,10 @@ export async function updateOrderFulfilment(
   if (error || !order) throw new Error('Order not found')
 
   const settings = await getRestaurantTrialSettings(db, accountId)
-  const deliveryFee = fulfilmentType === 'delivery' ? settings.deliveryFee : 0.0
+  const deliveryFee =
+    fulfilmentType === 'delivery'
+      ? calculateDeliveryFee(Number(order.subtotal), settings.deliveryFee)
+      : 0.0
   const totalAmount = Number(order.subtotal) + deliveryFee
   const nowIso = new Date().toISOString()
 
@@ -468,10 +483,11 @@ export async function updateOrderFulfilment(
   let messageText = ''
   if (fulfilmentType === 'delivery') {
     const addrText = address ? `\n📍 Delivery Address: ${address}` : ''
+    const feeText = deliveryFee === 0 ? 'FREE (₹0.00 for orders ₹300+)' : `₹${deliveryFee}`
     messageText =
       `🛵 *Delivery Confirmed!*${addrText}\n` +
       `Subtotal: ₹${order.subtotal}\n` +
-      `Delivery Fee: ₹${deliveryFee}\n` +
+      `Delivery Fee: ${feeText}\n` +
       `*Total Amount: ₹${totalAmount}*\n\n` +
       `How would you like to pay? Please choose *Cash* or *UPI / Online*.`
   } else {

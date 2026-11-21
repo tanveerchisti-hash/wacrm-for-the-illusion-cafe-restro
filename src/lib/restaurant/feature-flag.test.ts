@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { isRestaurantTrialEnabled } from './feature-flag'
 
 describe('isRestaurantTrialEnabled Feature Flag', () => {
@@ -15,78 +15,139 @@ describe('isRestaurantTrialEnabled Feature Flag', () => {
     process.env = originalEnv
   })
 
-  it('1. Defaults to false when env var is missing or empty', () => {
+  it('defaults to false when environment variable is unset', () => {
     expect(isRestaurantTrialEnabled()).toBe(false)
     expect(isRestaurantTrialEnabled({ accountId: 'acc-1', phoneNumberId: 'phone-1' })).toBe(false)
   })
 
-  it('2. Defaults to false when env var is set to false, 0, or anything other than "true"', () => {
+  it('returns false when set to values other than literal "true"', () => {
     process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'false'
     expect(isRestaurantTrialEnabled()).toBe(false)
 
-    process.env.RESTAURANT_ORDER_TRIAL_ENABLED = '0'
+    process.env.RESTAURANT_ORDER_TRIAL_ENABLED = '1'
     expect(isRestaurantTrialEnabled()).toBe(false)
 
-    process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'TRUE' // strict lowercase check
+    process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'yes'
     expect(isRestaurantTrialEnabled()).toBe(false)
   })
 
-  it('3. Returns true when RESTAURANT_ORDER_TRIAL_ENABLED="true" and no filters configured', () => {
+  it('returns true when enabled globally with no account or phone restrictions', () => {
     process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'true'
     expect(isRestaurantTrialEnabled()).toBe(true)
     expect(isRestaurantTrialEnabled({ accountId: 'any-acc' })).toBe(true)
   })
 
-  it('4. Filters strictly by RESTAURANT_TRIAL_ACCOUNT_IDS when specified', () => {
+  it('enforces account restriction when configured', () => {
     process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'true'
     process.env.RESTAURANT_TRIAL_ACCOUNT_IDS = 'acc-allowed-1, acc-allowed-2'
 
-    // Allowed accounts pass
     expect(isRestaurantTrialEnabled({ accountId: 'acc-allowed-1' })).toBe(true)
     expect(isRestaurantTrialEnabled({ accountId: 'acc-allowed-2' })).toBe(true)
 
-    // Non-allowed accounts fail
+    // Other or missing accounts are blocked
     expect(isRestaurantTrialEnabled({ accountId: 'acc-other' })).toBe(false)
     expect(isRestaurantTrialEnabled()).toBe(false)
     expect(isRestaurantTrialEnabled({ accountId: null })).toBe(false)
   })
 
-  it('5. Filters strictly by RESTAURANT_TRIAL_PHONE_NUMBER_IDS when specified', () => {
+  it('enforces phone number ID restriction for inbound messages', () => {
     process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'true'
     process.env.RESTAURANT_TRIAL_PHONE_NUMBER_IDS = 'test-meta-phone-123'
 
-    // Allowed phone passes
-    expect(isRestaurantTrialEnabled({ phoneNumberId: 'test-meta-phone-123' })).toBe(true)
+    expect(
+      isRestaurantTrialEnabled({
+        phoneNumberId: 'test-meta-phone-123',
+        scope: 'inbound',
+      }),
+    ).toBe(true)
 
-    // Different phone fails
-    expect(isRestaurantTrialEnabled({ phoneNumberId: 'prod-meta-phone-999' })).toBe(false)
-    expect(isRestaurantTrialEnabled()).toBe(false)
-    expect(isRestaurantTrialEnabled({ phoneNumberId: null })).toBe(false)
+    expect(
+      isRestaurantTrialEnabled({
+        phoneNumberId: 'prod-meta-phone-999',
+        scope: 'inbound',
+      }),
+    ).toBe(false)
+    expect(isRestaurantTrialEnabled({ scope: 'inbound' })).toBe(false)
+    expect(isRestaurantTrialEnabled({ phoneNumberId: null, scope: 'inbound' })).toBe(false)
   })
 
-  it('6. Requires both account ID and phone number ID to match when both are configured', () => {
+  it('correctly handles simultaneous account and phone number restrictions', () => {
     process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'true'
     process.env.RESTAURANT_TRIAL_ACCOUNT_IDS = 'acc-trial-1'
     process.env.RESTAURANT_TRIAL_PHONE_NUMBER_IDS = 'phone-test-1'
 
-    // Both match -> true
+    // Both match -> enabled for inbound
     expect(
-      isRestaurantTrialEnabled({ accountId: 'acc-trial-1', phoneNumberId: 'phone-test-1' }),
+      isRestaurantTrialEnabled({
+        accountId: 'acc-trial-1',
+        phoneNumberId: 'phone-test-1',
+        scope: 'inbound',
+      }),
     ).toBe(true)
 
-    // Only account matches -> false
+    // Wrong phone -> disabled for inbound
     expect(
-      isRestaurantTrialEnabled({ accountId: 'acc-trial-1', phoneNumberId: 'phone-prod' }),
+      isRestaurantTrialEnabled({
+        accountId: 'acc-trial-1',
+        phoneNumberId: 'phone-prod',
+        scope: 'inbound',
+      }),
     ).toBe(false)
 
-    // Only phone matches -> false
+    // Wrong account -> disabled
     expect(
-      isRestaurantTrialEnabled({ accountId: 'acc-prod', phoneNumberId: 'phone-test-1' }),
+      isRestaurantTrialEnabled({
+        accountId: 'acc-prod',
+        phoneNumberId: 'phone-test-1',
+        scope: 'inbound',
+      }),
     ).toBe(false)
 
-    // Neither matches -> false
+    // Both wrong -> disabled
     expect(
-      isRestaurantTrialEnabled({ accountId: 'acc-prod', phoneNumberId: 'phone-prod' }),
+      isRestaurantTrialEnabled({
+        accountId: 'acc-prod',
+        phoneNumberId: 'phone-prod',
+        scope: 'inbound',
+      }),
+    ).toBe(false)
+  })
+
+  it('allows dashboard and staff operations for authorized account without customer phoneNumberId', () => {
+    process.env.RESTAURANT_ORDER_TRIAL_ENABLED = 'true'
+    process.env.RESTAURANT_TRIAL_ACCOUNT_IDS = 'acc-trial-1'
+    process.env.RESTAURANT_TRIAL_PHONE_NUMBER_IDS = 'phone-test-1'
+
+    // Dashboard access with scope: 'dashboard'
+    expect(
+      isRestaurantTrialEnabled({
+        accountId: 'acc-trial-1',
+        scope: 'dashboard',
+      }),
+    ).toBe(true)
+
+    // Staff access with scope: 'staff'
+    expect(
+      isRestaurantTrialEnabled({
+        accountId: 'acc-trial-1',
+        scope: 'staff',
+      }),
+    ).toBe(true)
+
+    // Account check with scope: 'account'
+    expect(
+      isRestaurantTrialEnabled({
+        accountId: 'acc-trial-1',
+        scope: 'account',
+      }),
+    ).toBe(true)
+
+    // Unauthorized account dashboard access is rejected
+    expect(
+      isRestaurantTrialEnabled({
+        accountId: 'acc-other',
+        scope: 'dashboard',
+      }),
     ).toBe(false)
   })
 })

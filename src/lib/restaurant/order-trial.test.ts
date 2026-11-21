@@ -329,8 +329,8 @@ describe('Restaurant Order Trial Workflow', () => {
     const deliveryUpdated = {
       ...baseOrder,
       fulfilment_type: 'delivery',
-      delivery_fee: 40,
-      total_amount: 240,
+      delivery_fee: 20,
+      total_amount: 220,
       status: 'payment_pending',
     }
 
@@ -374,9 +374,9 @@ describe('Restaurant Order Trial Workflow', () => {
       configOwnerUserId: USER_ID,
     })
 
-    expect(delRes.order.total_amount).toBe(240)
+    expect(delRes.order.total_amount).toBe(220)
     expect(delRes.messageText).toContain('Delivery Confirmed')
-    expect(delRes.messageText).toContain('Delivery Fee: ₹40')
+    expect(delRes.messageText).toContain('Delivery Fee: ₹20')
 
     // Test Takeaway
     const dbTakeaway = {

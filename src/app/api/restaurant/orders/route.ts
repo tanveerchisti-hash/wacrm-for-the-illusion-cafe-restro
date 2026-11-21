@@ -13,7 +13,7 @@ export async function GET() {
     const ctx = await requireRole('viewer')
     const { supabase, accountId } = ctx
 
-    if (!isRestaurantTrialEnabled({ accountId })) {
+    if (!isRestaurantTrialEnabled({ accountId, scope: 'dashboard' })) {
       return NextResponse.json({ orders: [], enabled: false })
     }
 

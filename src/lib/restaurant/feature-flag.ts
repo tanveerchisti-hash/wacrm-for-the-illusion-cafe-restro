@@ -5,14 +5,25 @@
  * Must be explicitly enabled via environment variable:
  *   RESTAURANT_ORDER_TRIAL_ENABLED="true"
  *
- * Optional scoping to specific test accounts and Meta phone number IDs:
+ * Scoping to specific test accounts and Meta phone number IDs:
  *   RESTAURANT_TRIAL_ACCOUNT_IDS="uuid1,uuid2"
  *   RESTAURANT_TRIAL_PHONE_NUMBER_IDS="phone_id_1"
  */
 
+export type FeatureFlagScope = 'inbound' | 'dashboard' | 'staff' | 'account'
+
 export interface RestaurantTrialGateOptions {
   accountId?: string | null
   phoneNumberId?: string | null
+  /**
+   * Scope of the feature check:
+   * - 'inbound': (default when in inbound messaging context or phoneNumberId is provided)
+   *   Requires account authorization AND phone number authorization if configured.
+   * - 'dashboard' | 'staff' | 'account':
+   *   Account-scoped staff/dashboard operations. Enforces master flag and account authorization,
+   *   without rejecting due to absence of customer phoneNumberId in browser HTTP requests.
+   */
+  scope?: FeatureFlagScope
 }
 
 /**
@@ -44,8 +55,15 @@ export function isRestaurantTrialEnabled(options?: RestaurantTrialGateOptions): 
     .filter(Boolean)
 
   if (allowedPhoneIds.length > 0) {
-    if (!options?.phoneNumberId || !allowedPhoneIds.includes(options.phoneNumberId)) {
-      return false
+    const isStaffOrDashboard =
+      options?.scope === 'dashboard' ||
+      options?.scope === 'staff' ||
+      options?.scope === 'account'
+
+    if (!isStaffOrDashboard) {
+      if (!options?.phoneNumberId || !allowedPhoneIds.includes(options.phoneNumberId)) {
+        return false
+      }
     }
   }
 
