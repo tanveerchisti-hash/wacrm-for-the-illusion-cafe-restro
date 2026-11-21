@@ -60,10 +60,10 @@ export function CanvasToolbar({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel className="text-xs uppercase tracking-wider text-muted-foreground">
-              Triggers
-            </DropdownMenuLabel>
             <DropdownMenuGroup>
+              <DropdownMenuLabel className="text-xs uppercase tracking-wider text-muted-foreground">
+                Triggers
+              </DropdownMenuLabel>
               <DropdownMenuItem
                 onClick={() => onAddNode('trigger', 'order_event', 'Order Created')}
                 className="gap-2 cursor-pointer"
@@ -96,10 +96,10 @@ export function CanvasToolbar({
 
             <DropdownMenuSeparator />
 
-            <DropdownMenuLabel className="text-xs uppercase tracking-wider text-muted-foreground">
-              Actions
-            </DropdownMenuLabel>
             <DropdownMenuGroup>
+              <DropdownMenuLabel className="text-xs uppercase tracking-wider text-muted-foreground">
+                Actions
+              </DropdownMenuLabel>
               <DropdownMenuItem
                 onClick={() => onAddNode('action', 'whatsapp_message', 'Send WhatsApp Message')}
                 className="gap-2 cursor-pointer"
@@ -139,10 +139,10 @@ export function CanvasToolbar({
 
             <DropdownMenuSeparator />
 
-            <DropdownMenuLabel className="text-xs uppercase tracking-wider text-muted-foreground">
-              Logic & Branching
-            </DropdownMenuLabel>
             <DropdownMenuGroup>
+              <DropdownMenuLabel className="text-xs uppercase tracking-wider text-muted-foreground">
+                Logic & Branching
+              </DropdownMenuLabel>
               <DropdownMenuItem
                 onClick={() => onAddNode('condition', 'if_else', 'Check Condition')}
                 className="gap-2 cursor-pointer"
