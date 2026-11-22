@@ -140,9 +140,12 @@ describe('End-to-End Customer Feedback Automation Pipeline', () => {
     ledgerStatus?: string
     windowOpen?: boolean
     templateApproved?: boolean
+    order?: any
+    contact?: any
+    conversationId?: string
   }) {
-    const order = { ...mockOrder, status: overrides?.orderStatus || 'completed' }
-    const contact = { ...mockContact, tags: overrides?.contactTags || ['diner'] }
+    const order = overrides?.order || { ...mockOrder, status: overrides?.orderStatus || 'completed' }
+    const contact = overrides?.contact || { ...mockContact, tags: overrides?.contactTags || ['diner'] }
     const ledger = overrides?.ledgerStatus ? { id: 'ledg-1', status: overrides.ledgerStatus } : null
 
     if (overrides?.windowOpen !== undefined) {
@@ -190,12 +193,32 @@ describe('End-to-End Customer Feedback Automation Pipeline', () => {
           chain.update = vi.fn().mockReturnValue(chain)
           return chain
         }
+        if (table === 'message_templates') {
+          const tplRow = {
+            id: 'tpl-1',
+            account_id: ACCOUNT_ID,
+            name: 'customer_feedback',
+            status: 'APPROVED',
+            language: 'en',
+            category: 'MARKETING',
+            user_id: 'usr-1',
+            body_text: 'Thank you {{1}} for your order {{2}}',
+          }
+          const chain: any = {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            order: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: tplRow, error: null }),
+            then: (resolve: any) => resolve({ data: [tplRow], error: null }),
+          }
+          return chain
+        }
         if (table === 'conversations') {
           const chain: any = {}
           chain.select = vi.fn().mockReturnValue(chain)
           chain.eq = vi.fn().mockReturnValue(chain)
           chain.maybeSingle = vi.fn().mockResolvedValue({
-            data: { id: CONVERSATION_ID, account_id: ACCOUNT_ID, contact_id: CONTACT_ID },
+            data: { id: overrides?.conversationId || CONVERSATION_ID, account_id: ACCOUNT_ID, contact_id: contact.id },
             error: null,
           })
           chain.update = vi.fn().mockReturnValue(chain)
@@ -383,5 +406,114 @@ describe('End-to-End Customer Feedback Automation Pipeline', () => {
 
     const messageStep = result.stepRuns.find((s) => s.nodeId === 'action_whatsapp_feedback')
     expect(messageStep).toBeUndefined()
+  })
+
+  it('Stage E: allows test dispatch exclusively to authorized test recipient +919352326442 when BACKEND_FLOWS_ENABLE_TEST_SEND=true', async () => {
+    process.env.BACKEND_FLOWS_ENABLE_TEST_SEND = 'true'
+    process.env.WHATSAPP_TEST_RECIPIENTS = '+919352326442'
+
+    const testContact = {
+      id: 'a022cf33-8a8e-4176-96fb-51b1c86d2811',
+      account_id: ACCOUNT_ID,
+      name: 'Tanveer Chisti',
+      phone: '+919352326442',
+      tags: ['ordering_active'],
+    }
+
+    const testOrder = {
+      ...mockOrder,
+      id: '20a3a7fe-aab1-445b-b741-cad25d9752bc',
+      contact_id: testContact.id,
+      is_test_order: true,
+    }
+
+    const mockDb = createMockDb({
+      contact: testContact,
+      order: testOrder,
+      windowOpen: true,
+      templateApproved: true,
+    })
+
+    const result = await executeFlowGraph(feedbackPipelineDefinition, {
+      runId: 'run-stage-e-test',
+      flowId: 'flow-feedback-prod',
+      accountId: ACCOUNT_ID,
+      versionNumber: 1,
+      isDryRun: true,
+      initialVariables: {
+        orderId: testOrder.id,
+        contactId: testContact.id,
+        conversationId: CONVERSATION_ID,
+      },
+      supabase: mockDb as any,
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.stepRuns).toHaveLength(5)
+    const whatsappStep = result.stepRuns.find((s) => s.nodeId === 'action_whatsapp_feedback')
+    expect(whatsappStep?.status).toBe('completed')
+    const whatsappRecipient = (whatsappStep?.output?.recipient as any)
+    expect(whatsappRecipient?.isTestRecipient).toBe(true)
+    expect(whatsappRecipient?.eligibleForSend).toBe(true)
+    expect(whatsappRecipient?.phone).toMatch(/(\+)?91\*{5}6442/)
+  })
+
+  it('Stage E: blocks unauthorized customer recipient +919876543210 when BACKEND_FLOWS_ENABLE_TEST_SEND=true', async () => {
+    process.env.BACKEND_FLOWS_ENABLE_TEST_SEND = 'true'
+    process.env.WHATSAPP_TEST_RECIPIENTS = '+919352326442' // only developer personal number is allowlisted
+
+    const unauthorizedContact = {
+      id: 'cnt-unauthorized-customer',
+      account_id: ACCOUNT_ID,
+      name: 'Random Customer',
+      phone: '+919876543210',
+      tags: ['customer'],
+    }
+
+    const customerOrder = {
+      ...mockOrder,
+      id: 'ord-customer-999',
+      contact_id: unauthorizedContact.id,
+      is_test_order: true,
+    }
+
+    const mockDb = createMockDb({
+      contact: unauthorizedContact,
+      order: customerOrder,
+      windowOpen: true,
+      templateApproved: true,
+    })
+
+    vi.mocked(whatsappSender.validateTemplateApproved).mockResolvedValue({
+      approved: true,
+      language: 'en',
+    })
+
+    const { dispatchBackendFlowWhatsApp } = await import('@/lib/backend-flows/engine/whatsapp-sender')
+    const { resolveWorkflowRecipient } = await import('@/lib/backend-flows/engine/recipient-resolver')
+
+    const recipient = await resolveWorkflowRecipient({
+      accountId: ACCOUNT_ID,
+      contactId: unauthorizedContact.id,
+      isTestOrder: true,
+      supabase: mockDb as any,
+    })
+
+    expect(recipient.isTestRecipient).toBe(false)
+    expect(recipient.eligibleForSend).toBe(false)
+    expect(recipient.errorCode).toBe('RECIPIENT_TEST_MODE_BLOCKED')
+
+    const dispatchResult = await dispatchBackendFlowWhatsApp({
+      node: feedbackPipelineDefinition.nodes[4],
+      vars: { customerName: unauthorizedContact.name, orderNumber: customerOrder.order_number },
+      recipient,
+      accountId: ACCOUNT_ID,
+      supabase: mockDb as any,
+    })
+
+    expect(dispatchResult.success).toBe(false)
+    expect(dispatchResult.delivered).toBe(false)
+    expect(dispatchResult.errorCode).toBe('RECIPIENT_TEST_MODE_BLOCKED')
+    expect(dispatchResult.error).toContain('is not an authorized test number')
   })
 })
