@@ -1,5 +1,10 @@
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
 import type { BackendFlowNode } from '../types'
+import {
+  resolveWorkflowRecipient,
+  maskPhoneNumber,
+  type ResolvedRecipient,
+} from './recipient-resolver'
 
 /**
  * Resolves a dotted path (e.g. 'order.subtotal' or 'customer.phone') from a variable context.
@@ -80,6 +85,10 @@ export interface ActionExecutionOutput {
 
 export interface ActionExecutionOptions {
   isDryRun?: boolean
+  accountId?: string
+  recipient?: ResolvedRecipient
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase?: any
 }
 
 /**
@@ -97,13 +106,96 @@ export async function executeActionNode(
     case 'whatsapp_message': {
       const rawTemplate = (data.messageTemplate as string) || ''
       const formattedMessage = interpolateString(rawTemplate, vars)
+
+      // Resolve recipient through existing context or dedicated secure resolver
+      let recipient = options?.recipient || (vars.recipient as ResolvedRecipient | undefined)
+
+      if (!recipient) {
+        const accountId =
+          options?.accountId ||
+          (vars.accountId as string) ||
+          (vars.account_id as string) ||
+          ''
+        const orderId = (vars.orderId || vars.order_id) as string | undefined
+        const contactId = (vars.contactId || vars.contact_id) as string | undefined
+        const conversationId = (vars.conversationId || vars.conversation_id) as string | undefined
+        const directPhone = (
+          vars.customerPhone ||
+          vars.phone ||
+          (vars.customer as Record<string, unknown> | undefined)?.phone
+        ) as string | undefined
+        const directName = (
+          vars.customerName ||
+          vars.name ||
+          (vars.customer as Record<string, unknown> | undefined)?.name
+        ) as string | undefined
+
+        recipient = await resolveWorkflowRecipient({
+          accountId,
+          orderId,
+          contactId,
+          conversationId,
+          directPhone,
+          directName,
+          isSimulation: options?.isDryRun,
+          supabase: options?.supabase,
+        })
+      }
+
+      if (!recipient || !recipient.success) {
+        const errCode = recipient?.errorCode || 'RECIPIENT_NOT_FOUND'
+        const errMsg = recipient?.errorMessage || 'Recipient could not be resolved from order or contact.'
+        return {
+          success: false,
+          error: `[${errCode}] ${errMsg}`,
+          data: {
+            delivered: false,
+            simulated: !!options?.isDryRun,
+            formattedMessage,
+            errorCode: errCode,
+            errorMessage: errMsg,
+          },
+        }
+      }
+
+      if (!recipient.eligibleForSend) {
+        const errCode = recipient.errorCode || 'RECIPIENT_TEST_MODE_BLOCKED'
+        const errMsg = recipient.errorMessage || 'Recipient not authorized in test mode.'
+        return {
+          success: false,
+          error: `[${errCode}] ${errMsg}`,
+          data: {
+            delivered: false,
+            simulated: !!options?.isDryRun,
+            formattedMessage,
+            to: recipient.formattedPhone || recipient.phone,
+            recipient: {
+              contactId: recipient.contactId,
+              name: recipient.contactName,
+              phone: maskPhoneNumber(recipient.phone || ''),
+              isTestRecipient: false,
+              eligibleForSend: false,
+            },
+            errorCode: errCode,
+            errorMessage: errMsg,
+          },
+        }
+      }
+
       return {
         success: true,
         data: {
-          delivered: !options?.isDryRun,
+          delivered: false, // Phase 5 will implement real Meta delivery
           simulated: !!options?.isDryRun,
           formattedMessage,
-          to: vars.customerPhone || vars.phone || '+91XXXXXXXXXX',
+          to: recipient.formattedPhone || recipient.phone,
+          recipient: {
+            contactId: recipient.contactId,
+            name: recipient.contactName,
+            phone: maskPhoneNumber(recipient.phone || ''),
+            isTestRecipient: recipient.isTestRecipient,
+            eligibleForSend: true,
+          },
         },
       }
     }

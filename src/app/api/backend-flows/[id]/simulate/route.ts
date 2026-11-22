@@ -49,6 +49,7 @@ export async function POST(request: Request, context: RouteContext) {
       isDryRun: true,
       maxRetries: 1,
       timeoutMs: 15000,
+      supabase,
     })
 
     return NextResponse.json({ simulation: simulationResult })

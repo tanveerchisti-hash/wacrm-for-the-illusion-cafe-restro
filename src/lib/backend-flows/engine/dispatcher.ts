@@ -3,6 +3,7 @@ import type { BackendFlow } from '../types'
 import type { BackendFlowEvent, FlowExecutionState } from './types'
 import { matchesTrigger } from './matcher'
 import { executeFlowGraph } from './graph-runner'
+import { resolveWorkflowRecipient } from './recipient-resolver'
 
 export interface ExecuteOptions {
   allowDraft?: boolean
@@ -39,7 +40,33 @@ export async function executeWorkflowRun(
     console.error('[backend-flows] Failed to create initial run record:', err)
   }
 
-  // 2. Execute graph
+  // 2. Resolve verified customer recipient before graph traversal
+  const resolvedRecipient = await resolveWorkflowRecipient({
+    accountId: flow.account_id,
+    orderId: event.orderId || (event.payload?.orderId as string),
+    contactId: event.contactId || (event.payload?.contactId as string),
+    conversationId: event.conversationId || (event.payload?.conversationId as string),
+    supabase,
+  })
+
+  const customerPhone = resolvedRecipient.success
+    ? (resolvedRecipient.formattedPhone || resolvedRecipient.phone)
+    : undefined
+  const customerName = resolvedRecipient.success
+    ? resolvedRecipient.contactName
+    : undefined
+
+  const initialVariables: Record<string, unknown> = {
+    ...event.payload,
+    contactId: resolvedRecipient.contactId || event.contactId || (event.payload?.contactId as string),
+    orderId: event.orderId || (event.payload?.orderId as string),
+    conversationId: event.conversationId || (event.payload?.conversationId as string),
+    ...(customerPhone ? { customerPhone, phone: customerPhone } : {}),
+    ...(customerName ? { customerName, name: customerName } : {}),
+    recipient: resolvedRecipient,
+  }
+
+  // 3. Execute graph
   const maxRetries = flow.metadata?.max_retries ?? 3
   const timeoutMs = (flow.metadata?.timeout_seconds ?? 300) * 1000
 
@@ -48,14 +75,10 @@ export async function executeWorkflowRun(
     flowId: flow.id,
     accountId: flow.account_id,
     versionNumber,
-    initialVariables: {
-      ...event.payload,
-      contactId: event.contactId,
-      orderId: event.orderId,
-      conversationId: event.conversationId,
-    },
+    initialVariables,
     maxRetries,
     timeoutMs,
+    supabase,
   })
 
   // 3. Persist final execution state to backend_flow_runs

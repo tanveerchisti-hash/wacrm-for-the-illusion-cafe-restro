@@ -94,7 +94,8 @@ describe('Backend Flow Graph Runner', () => {
       flowId: 'flow-1',
       accountId: 'acc-1',
       versionNumber: 1,
-      initialVariables: { order: { subtotal: 1330 } },
+      isDryRun: true,
+      initialVariables: { order: { subtotal: 1330 }, customerPhone: '+919876543210' },
     })
 
     expect(vipResult.status).toBe('completed')
@@ -108,7 +109,8 @@ describe('Backend Flow Graph Runner', () => {
       flowId: 'flow-1',
       accountId: 'acc-1',
       versionNumber: 1,
-      initialVariables: { order: { subtotal: 450 } },
+      isDryRun: true,
+      initialVariables: { order: { subtotal: 450 }, customerPhone: '+919876543210' },
     })
 
     expect(standardResult.status).toBe('completed')
