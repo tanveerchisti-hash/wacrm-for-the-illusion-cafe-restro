@@ -45,7 +45,7 @@ describe('POST /api/backend-flows/[id]/simulate', () => {
 
     const req = new Request('http://localhost/api/backend-flows/f-1/simulate', {
       method: 'POST',
-      body: JSON.stringify({ payload: { customerName: 'Tanveer' } }),
+      body: JSON.stringify({ payload: { customerName: 'Tanveer', customerPhone: '+919876543210' } }),
     })
 
     const res = await POST(req, { params: Promise.resolve({ id: 'f-1' }) })

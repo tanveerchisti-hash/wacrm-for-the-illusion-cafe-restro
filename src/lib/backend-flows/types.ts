@@ -92,6 +92,8 @@ export interface BackendFlowVersion {
 export type BackendFlowRunStatus =
   | 'pending'
   | 'running'
+  | 'waiting'
+  | 'resuming'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -111,6 +113,9 @@ export interface BackendFlowRun {
   completed_at: string | null
   duration_ms: number | null
   created_at: string
+  waiting_until?: string | null
+  waiting_node_id?: string | null
+  lease_expires_at?: string | null
 }
 
 export interface CreateBackendFlowInput {

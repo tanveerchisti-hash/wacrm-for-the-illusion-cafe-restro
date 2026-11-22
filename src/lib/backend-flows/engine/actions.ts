@@ -1,5 +1,11 @@
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
 import type { BackendFlowNode } from '../types'
+import {
+  resolveWorkflowRecipient,
+  maskPhoneNumber,
+  type ResolvedRecipient,
+} from './recipient-resolver'
+import { dispatchBackendFlowWhatsApp } from './whatsapp-sender'
 
 /**
  * Resolves a dotted path (e.g. 'order.subtotal' or 'customer.phone') from a variable context.
@@ -80,6 +86,10 @@ export interface ActionExecutionOutput {
 
 export interface ActionExecutionOptions {
   isDryRun?: boolean
+  accountId?: string
+  recipient?: ResolvedRecipient
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase?: any
 }
 
 /**
@@ -97,13 +107,114 @@ export async function executeActionNode(
     case 'whatsapp_message': {
       const rawTemplate = (data.messageTemplate as string) || ''
       const formattedMessage = interpolateString(rawTemplate, vars)
+
+      // Resolve recipient through existing context or dedicated secure resolver
+      let recipient = options?.recipient || (vars.recipient as ResolvedRecipient | undefined)
+
+      if (!recipient) {
+        const accountId =
+          options?.accountId ||
+          (vars.accountId as string) ||
+          (vars.account_id as string) ||
+          ''
+        const orderId = (vars.orderId || vars.order_id) as string | undefined
+        const contactId = (vars.contactId || vars.contact_id) as string | undefined
+        const conversationId = (vars.conversationId || vars.conversation_id) as string | undefined
+        const directPhone = (
+          vars.customerPhone ||
+          vars.phone ||
+          (vars.customer as Record<string, unknown> | undefined)?.phone
+        ) as string | undefined
+        const directName = (
+          vars.customerName ||
+          vars.name ||
+          (vars.customer as Record<string, unknown> | undefined)?.name
+        ) as string | undefined
+
+        recipient = await resolveWorkflowRecipient({
+          accountId,
+          orderId,
+          contactId,
+          conversationId,
+          directPhone,
+          directName,
+          isSimulation: options?.isDryRun,
+          supabase: options?.supabase,
+        })
+      }
+
+      if (!recipient || !recipient.success) {
+        const errCode = recipient?.errorCode || 'RECIPIENT_NOT_FOUND'
+        const errMsg = recipient?.errorMessage || 'Recipient could not be resolved from order or contact.'
+        return {
+          success: false,
+          error: `[${errCode}] ${errMsg}`,
+          data: {
+            delivered: false,
+            simulated: !!options?.isDryRun,
+            formattedMessage,
+            errorCode: errCode,
+            errorMessage: errMsg,
+          },
+        }
+      }
+
+      if (!recipient.eligibleForSend) {
+        const errCode = recipient.errorCode || 'RECIPIENT_TEST_MODE_BLOCKED'
+        const errMsg = recipient.errorMessage || 'Recipient not authorized in test mode.'
+        return {
+          success: false,
+          error: `[${errCode}] ${errMsg}`,
+          data: {
+            delivered: false,
+            simulated: !!options?.isDryRun,
+            formattedMessage,
+            to: recipient.formattedPhone || recipient.phone,
+            recipient: {
+              contactId: recipient.contactId,
+              name: recipient.contactName,
+              phone: maskPhoneNumber(recipient.phone || ''),
+              isTestRecipient: false,
+              eligibleForSend: false,
+            },
+            errorCode: errCode,
+            errorMessage: errMsg,
+          },
+        }
+      }
+
+      // Execute production-safe WhatsApp dispatching through Phase 5 messaging architecture
+      const accountId =
+        options?.accountId ||
+        (vars.accountId as string) ||
+        (vars.account_id as string) ||
+        ''
+
+      const dispatchResult = await dispatchBackendFlowWhatsApp({
+        node,
+        vars,
+        recipient,
+        accountId,
+        isDryRun: options?.isDryRun,
+        supabase: options?.supabase,
+      })
+
+      if (!dispatchResult.success) {
+        return {
+          success: false,
+          error: dispatchResult.error || `[${dispatchResult.errorCode || 'DISPATCH_ERROR'}] Dispatch failed.`,
+          data: {
+            ...dispatchResult,
+            to: recipient.formattedPhone || recipient.phone,
+          },
+        }
+      }
+
       return {
         success: true,
         data: {
-          delivered: !options?.isDryRun,
-          simulated: !!options?.isDryRun,
-          formattedMessage,
-          to: vars.customerPhone || vars.phone || '+91XXXXXXXXXX',
+          ...dispatchResult,
+          to: recipient.formattedPhone || recipient.phone,
         },
       }
     }
@@ -199,12 +310,49 @@ export async function executeActionNode(
     }
 
     case 'delay': {
-      const delayMinutes = (data.delayMinutes as number) || 1
+      const rawMinutes = data.delayMinutes ?? data.waitDuration
+      const delayMinutes =
+        typeof rawMinutes === 'number' && !isNaN(rawMinutes) && rawMinutes > 0
+          ? Math.min(1440, rawMinutes)
+          : 1
+
+      const rawSeconds = data.delaySeconds
+      const delaySeconds =
+        typeof rawSeconds === 'number' && !isNaN(rawSeconds) && rawSeconds > 0
+          ? rawSeconds
+          : undefined
+
+      const delayMs =
+        delaySeconds !== undefined
+          ? Math.round(delaySeconds * 1000)
+          : Math.round(delayMinutes * 60 * 1000)
+
+      const scheduledResumeAt = new Date(Date.now() + delayMs).toISOString()
+
+      if (options?.isDryRun) {
+        return {
+          success: true,
+          data: {
+            simulated: true,
+            delayScheduled: true,
+            delayMinutes,
+            delaySeconds,
+            delayMs,
+            hypotheticalResumeAt: scheduledResumeAt,
+            note: 'Dry-run simulation: delay evaluated immediately without pausing execution',
+          },
+        }
+      }
+
       return {
         success: true,
         data: {
           delayScheduled: true,
           delayMinutes,
+          delaySeconds,
+          delayMs,
+          scheduledResumeAt,
+          waitingUntil: scheduledResumeAt,
         },
       }
     }

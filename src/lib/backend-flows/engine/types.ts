@@ -8,6 +8,9 @@ export interface BackendFlowEvent {
   contactId?: string
   orderId?: string
   conversationId?: string
+  eventId?: string
+  idempotencyKey?: string
+  isReplay?: boolean
 }
 
 export interface StepExecutionResult {
@@ -21,6 +24,7 @@ export interface StepExecutionResult {
   input: Record<string, unknown>
   output?: Record<string, unknown>
   error?: string
+  reused?: boolean
 }
 
 export interface FlowExecutionState {
@@ -28,11 +32,17 @@ export interface FlowExecutionState {
   flowId: string
   accountId: string
   versionNumber: number
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'timed_out'
+  status: 'pending' | 'running' | 'waiting' | 'resuming' | 'completed' | 'failed' | 'cancelled' | 'timed_out'
   variables: Record<string, unknown>
   stepRuns: StepExecutionResult[]
   errorMessage?: string
   startedAt: string
   completedAt?: string
   durationMs?: number
+  idempotencyKey?: string
+  isDuplicate?: boolean
+  originalRunId?: string
+  waitingUntil?: string
+  waitingNodeId?: string
+  pendingNodeIds?: string[]
 }

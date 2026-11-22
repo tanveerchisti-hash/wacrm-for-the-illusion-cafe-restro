@@ -857,7 +857,8 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
                 <div className="space-y-3">
                   {runs.map((r) => {
                     const isSuccess = r.status === 'completed'
-                    const isRunning = r.status === 'running'
+                    const isRunning = r.status === 'running' || r.status === 'resuming'
+                    const isWaiting = r.status === 'waiting'
                     return (
                       <div
                         key={r.id}
@@ -870,6 +871,8 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
                               className={
                                 isSuccess
                                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 text-xs'
+                                  : isWaiting
+                                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 text-xs'
                                   : isRunning
                                   ? 'bg-sky-500/10 text-sky-400 border-sky-500/30 text-xs'
                                   : 'bg-rose-500/10 text-rose-400 border-rose-500/30 text-xs'
@@ -881,6 +884,11 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
                             <span className="text-xs text-muted-foreground">
                               via {r.triggered_by}
                             </span>
+                            {r.waiting_until && isWaiting && (
+                              <span className="text-[11px] text-amber-400/90 font-mono">
+                                • Resumes: {new Date(r.waiting_until).toLocaleTimeString()}
+                              </span>
+                            )}
                           </div>
                           {r.error_message && (
                             <p className="text-xs text-rose-400 font-mono">
