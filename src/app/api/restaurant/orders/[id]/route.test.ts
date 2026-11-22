@@ -3,6 +3,7 @@ import { GET, PATCH } from './route'
 import * as accountAuth from '@/lib/auth/account'
 import * as featureFlag from '@/lib/restaurant/feature-flag'
 import * as flowIntegration from '@/lib/restaurant/flow-integration'
+import * as orderOutbox from '@/lib/restaurant/order-outbox'
 
 vi.mock('@/lib/auth/account', () => ({
   requireRole: vi.fn(),
@@ -15,6 +16,11 @@ vi.mock('@/lib/restaurant/feature-flag', () => ({
 
 vi.mock('@/lib/restaurant/flow-integration', () => ({
   dispatchRestaurantOrderFlowEvent: vi.fn(),
+}))
+
+vi.mock('@/lib/restaurant/order-outbox', () => ({
+  enqueueOrderOutboxEvent: vi.fn().mockResolvedValue({ enqueued: true, outboxId: 'outbox-1' }),
+  dispatchOutboxEventRecord: vi.fn().mockResolvedValue(true),
 }))
 
 vi.mock('@/lib/restaurant/order-trial', () => ({
@@ -99,6 +105,109 @@ describe('GET & PATCH /api/restaurant/orders/[id]', () => {
         event: 'order.ready',
       })
     )
+  })
+
+  it('PATCH /api/restaurant/orders/[id] with status=completed routes through durable outbox', async () => {
+    mockSupabase.from.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: mockOrder, error: null }),
+          }),
+        }),
+      }),
+    }).mockReturnValueOnce({
+      update: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            select: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { ...mockOrder, status: 'completed' },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    })
+
+    const req = new Request('http://localhost', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'completed' }),
+    })
+
+    const res = await PATCH(req, {
+      params: Promise.resolve({ id: 'ord-123' }),
+    })
+
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.success).toBe(true)
+    expect(orderOutbox.enqueueOrderOutboxEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        accountId: 'acc-1',
+        orderId: 'ord-123',
+        eventType: 'order.completed',
+      })
+    )
+    expect(orderOutbox.dispatchOutboxEventRecord).toHaveBeenCalled()
+  })
+
+  it('PATCH returns unchanged=true if order is already in target status', async () => {
+    const completedOrder = { ...mockOrder, status: 'completed' }
+    mockSupabase.from.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: completedOrder, error: null }),
+          }),
+        }),
+      }),
+    })
+
+    const req = new Request('http://localhost', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'completed' }),
+    })
+
+    const res = await PATCH(req, {
+      params: Promise.resolve({ id: 'ord-123' }),
+    })
+
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.unchanged).toBe(true)
+    expect(orderOutbox.enqueueOrderOutboxEvent).not.toHaveBeenCalled()
+  })
+
+  it('PATCH rejects updating an order that was cancelled (409 Conflict)', async () => {
+    const cancelledOrder = { ...mockOrder, status: 'cancelled' }
+    mockSupabase.from.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: cancelledOrder, error: null }),
+          }),
+        }),
+      }),
+    })
+
+    const req = new Request('http://localhost', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'completed' }),
+    })
+
+    const res = await PATCH(req, {
+      params: Promise.resolve({ id: 'ord-123' }),
+    })
+
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error).toContain("Cannot update order with status 'cancelled'")
   })
 
   it('PATCH rejects invalid status update', async () => {

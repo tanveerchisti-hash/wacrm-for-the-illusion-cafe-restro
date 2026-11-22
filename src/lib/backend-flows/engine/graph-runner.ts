@@ -189,6 +189,9 @@ export async function executeFlowGraph(
       let actionOutput = await executeActionNode(node, variables, actionOpts)
 
       while (!actionOutput.success && attempts < maxRetries) {
+        if (actionOutput.shouldRetry === false || actionOutput.skipped) {
+          break
+        }
         attempts++
         // Exponential backoff: 50ms, 100ms, 200ms
         await new Promise((resolve) => setTimeout(resolve, Math.min(50 * Math.pow(2, attempts), 500)))
@@ -196,6 +199,27 @@ export async function executeFlowGraph(
       }
 
       const stepDuration = Date.now() - stepStart
+
+      // Handle explicitly skipped or ineligible outcomes safely without failing the whole execution
+      if (actionOutput.skipped) {
+        stepRuns.push({
+          nodeId: node.id,
+          nodeType: 'action',
+          subType,
+          status: 'skipped',
+          startedAt: stepStartedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: stepDuration,
+          input: { ...variables },
+          output: actionOutput.data,
+          error: actionOutput.error,
+        })
+
+        // Ineligible or skipped actions safely terminate downstream execution without error
+        overallStatus = 'completed'
+        break
+      }
+
       if (actionOutput.success) {
         // Merge output variables
         if (actionOutput.data) {

@@ -80,6 +80,9 @@ export function evaluateConditionNode(
 
 export interface ActionExecutionOutput {
   success: boolean
+  skipped?: boolean
+  shouldRetry?: boolean
+  errorCode?: string
   data?: Record<string, unknown>
   error?: string
 }
@@ -148,6 +151,8 @@ export async function executeActionNode(
         const errMsg = recipient?.errorMessage || 'Recipient could not be resolved from order or contact.'
         return {
           success: false,
+          shouldRetry: false,
+          errorCode: errCode,
           error: `[${errCode}] ${errMsg}`,
           data: {
             delivered: false,
@@ -164,6 +169,8 @@ export async function executeActionNode(
         const errMsg = recipient.errorMessage || 'Recipient not authorized in test mode.'
         return {
           success: false,
+          shouldRetry: false,
+          errorCode: errCode,
           error: `[${errCode}] ${errMsg}`,
           data: {
             delivered: false,
@@ -200,8 +207,11 @@ export async function executeActionNode(
       })
 
       if (!dispatchResult.success) {
+        const shouldRetry = (dispatchResult as unknown as { shouldRetry?: boolean }).shouldRetry ?? false
         return {
           success: false,
+          shouldRetry,
+          errorCode: dispatchResult.errorCode,
           error: dispatchResult.error || `[${dispatchResult.errorCode || 'DISPATCH_ERROR'}] Dispatch failed.`,
           data: {
             ...dispatchResult,
@@ -215,6 +225,85 @@ export async function executeActionNode(
         data: {
           ...dispatchResult,
           to: recipient.formattedPhone || recipient.phone,
+        },
+      }
+    }
+
+    case 'restaurant_feedback_eligibility': {
+      const { validateRestaurantFeedbackEligibility } = await import('@/lib/restaurant/feedback-eligibility')
+      const accountId =
+        options?.accountId ||
+        (vars.accountId as string) ||
+        (vars.account_id as string) ||
+        ''
+      const orderId = (vars.orderId || vars.order_id) as string | undefined
+      const contactId = (vars.contactId || vars.contact_id) as string | undefined
+      const conversationId = (vars.conversationId || vars.conversation_id) as string | undefined
+
+      const result = await validateRestaurantFeedbackEligibility({
+        accountId,
+        orderId,
+        contactId,
+        conversationId,
+        isDryRun: options?.isDryRun,
+        supabase: options?.supabase,
+      })
+
+      if (!result.eligible) {
+        return {
+          success: false,
+          skipped: result.skipped ?? true,
+          shouldRetry: result.shouldRetry ?? false,
+          errorCode: result.code,
+          error: `[${result.code || 'INELIGIBLE'}] ${result.reason || 'Feedback eligibility check failed.'}`,
+          data: { ...result },
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          ...result,
+        },
+      }
+    }
+
+    case 'restaurant_feedback_revalidation': {
+      const { revalidateRestaurantFeedbackEligibility } = await import('@/lib/restaurant/feedback-eligibility')
+      const accountId =
+        options?.accountId ||
+        (vars.accountId as string) ||
+        (vars.account_id as string) ||
+        ''
+      const orderId = (vars.orderId || vars.order_id) as string | undefined
+      const contactId = (vars.contactId || vars.contact_id) as string | undefined
+      const conversationId = (vars.conversationId || vars.conversation_id) as string | undefined
+
+      const result = await revalidateRestaurantFeedbackEligibility({
+        accountId,
+        orderId,
+        contactId,
+        conversationId,
+        isDryRun: options?.isDryRun,
+        supabase: options?.supabase,
+      })
+
+      if (!result.eligible) {
+        return {
+          success: false,
+          skipped: result.skipped ?? true,
+          shouldRetry: result.shouldRetry ?? false,
+          errorCode: result.code,
+          error: `[${result.code || 'REVALIDATION_FAILED'}] ${result.reason || 'Pre-send revalidation check failed.'}`,
+          data: { ...result },
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          revalidated: true,
+          ...result,
         },
       }
     }

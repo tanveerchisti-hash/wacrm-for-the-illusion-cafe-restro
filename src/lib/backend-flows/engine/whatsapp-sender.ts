@@ -34,7 +34,9 @@ export interface DispatchWhatsAppOptions {
 export interface DispatchWhatsAppResult {
   success: boolean
   delivered: boolean
+  submittedToMeta?: boolean
   simulated: boolean
+  shouldRetry?: boolean
   mode: 'dry_run' | 'disabled_by_default' | 'test_send' | 'live_send'
   whatsappMessageId?: string
   messageId?: string
@@ -217,12 +219,26 @@ export async function dispatchBackendFlowWhatsApp(
     }
   }
 
-  // 3. Recipient Validation Guard (Phase 2 integration)
+  // 3. Emergency Shutdown Guard
+  if (process.env.BACKEND_FLOWS_EMERGENCY_PAUSE === 'true') {
+    return {
+      success: false,
+      delivered: false,
+      simulated: false,
+      shouldRetry: false,
+      mode: 'disabled_by_default',
+      errorCode: 'EMERGENCY_PAUSED',
+      error: '[EMERGENCY_PAUSED] Outbound messaging is currently suspended by emergency shutdown configuration.',
+    }
+  }
+
+  // 4. Recipient Validation Guard (Phase 2 integration)
   if (!recipient.success || !recipient.phone) {
     return {
       success: false,
       delivered: false,
       simulated: false,
+      shouldRetry: false,
       mode: 'disabled_by_default',
       errorCode: recipient.errorCode || 'RECIPIENT_NOT_FOUND',
       error: `[${recipient.errorCode || 'RECIPIENT_NOT_FOUND'}] ${recipient.errorMessage || 'Recipient could not be resolved from order or contact.'}`,
@@ -290,29 +306,80 @@ export async function dispatchBackendFlowWhatsApp(
     }
   }
 
-  // 5. Test Environment Safety Guards (Section 2 & 13)
+  // 5. Test Environment & Production Sender Safety Guards (Section 2 & 13)
   const isLiveSendEnabled = process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND === 'true'
   const isTestSendEnabled = process.env.BACKEND_FLOWS_ENABLE_TEST_SEND === 'true'
 
-  // If live sending is attempted in this environment, fail closed because only the Meta test number is connected
+  // If live sending is enabled, enforce rigorous production sender verification
   if (isLiveSendEnabled) {
-    return {
-      success: false,
-      delivered: false,
-      simulated: false,
-      mode: 'live_send',
-      errorCode: 'PRODUCTION_SENDER_DISABLED',
-      error: '[PRODUCTION_SENDER_DISABLED] Outbound live messaging is disabled in this environment. Meta test number is active.',
+    if (!supabase?.from) {
+      return {
+        success: false,
+        delivered: false,
+        simulated: false,
+        shouldRetry: false,
+        mode: 'live_send',
+        errorCode: 'PRODUCTION_SENDER_DISABLED',
+        error: '[PRODUCTION_SENDER_DISABLED] Database client unavailable for sender verification.',
+      }
     }
-  }
 
-  // If test mode is enabled, verify the recipient is on the authorized allowlist
-  if (isTestSendEnabled) {
+    const { data: config, error: configErr } = await supabase
+      .from('whatsapp_config')
+      .select('phone_number_id, waba_id, status, registered_at')
+      .eq('account_id', accountId)
+      .maybeSingle()
+
+    if (configErr || !config) {
+      return {
+        success: false,
+        delivered: false,
+        simulated: false,
+        shouldRetry: false,
+        mode: 'live_send',
+        errorCode: 'PRODUCTION_SENDER_DISABLED',
+        error: `[PRODUCTION_SENDER_DISABLED] Outbound live messaging is disabled. No verified production sender configured for account ${accountId}.`,
+      }
+    }
+
+    // Must be officially connected and registered with Meta Cloud API PIN (registered_at != null)
+    if (config.status !== 'connected' || !config.registered_at) {
+      return {
+        success: false,
+        delivered: false,
+        simulated: false,
+        shouldRetry: false,
+        mode: 'live_send',
+        errorCode: 'PRODUCTION_SENDER_DISABLED',
+        error: '[PRODUCTION_SENDER_DISABLED] Outbound live messaging is disabled in this environment. Meta test number is active or sender is unverified.',
+      }
+    }
+
+    // Explicitly reject Meta Developer Test Numbers in production sending mode
+    const testNumberIds = [
+      process.env.META_TEST_PHONE_NUMBER_ID,
+      '106540352331505',
+    ].filter(Boolean)
+
+    if (testNumberIds.includes(config.phone_number_id)) {
+      return {
+        success: false,
+        delivered: false,
+        simulated: false,
+        shouldRetry: false,
+        mode: 'live_send',
+        errorCode: 'PRODUCTION_SENDER_DISABLED',
+        error: '[PRODUCTION_SENDER_DISABLED] Outbound live messaging is disabled in this environment. Meta test number is active.',
+      }
+    }
+  } else if (isTestSendEnabled) {
+    // If test mode is enabled, verify the recipient is on the authorized allowlist
     if (!recipient.isTestRecipient) {
       return {
         success: false,
         delivered: false,
         simulated: false,
+        shouldRetry: false,
         mode: 'test_send',
         errorCode: 'RECIPIENT_TEST_MODE_BLOCKED',
         error: `[RECIPIENT_TEST_MODE_BLOCKED] Recipient ${maskedPhone} is not an authorized test number for Meta Cloud API test number.`,
@@ -324,6 +391,7 @@ export async function dispatchBackendFlowWhatsApp(
       success: true,
       delivered: false,
       simulated: false,
+      shouldRetry: false,
       mode: 'disabled_by_default',
       to: destinationPhone,
       formattedMessage,
@@ -342,13 +410,14 @@ export async function dispatchBackendFlowWhatsApp(
     }
   }
 
-  // 6. Execute Controlled Test Dispatch via Meta WhatsApp Cloud API
+  // 6. Execute Dispatch via Meta WhatsApp Cloud API
   if (!supabase?.from) {
     return {
       success: false,
       delivered: false,
       simulated: false,
-      mode: 'test_send',
+      shouldRetry: false,
+      mode: isLiveSendEnabled ? 'live_send' : 'test_send',
       errorCode: 'DATABASE_CLIENT_UNAVAILABLE',
       error: 'Database client unavailable for Meta dispatch.',
     }
@@ -366,7 +435,8 @@ export async function dispatchBackendFlowWhatsApp(
         success: false,
         delivered: false,
         simulated: false,
-        mode: 'test_send',
+        shouldRetry: false,
+        mode: isLiveSendEnabled ? 'live_send' : 'test_send',
         errorCode: 'WHATSAPP_NOT_CONFIGURED',
         error: 'WhatsApp integration is not configured for this account.',
       }
@@ -378,6 +448,7 @@ export async function dispatchBackendFlowWhatsApp(
 
     let waMessageId = ''
     let lastMetaErr: unknown = null
+    let isAmbiguousTimeout = false
 
     for (const v of variants) {
       try {
@@ -405,7 +476,25 @@ export async function dispatchBackendFlowWhatsApp(
       } catch (err) {
         lastMetaErr = err
         const msg = err instanceof Error ? err.message : String(err)
+        const lowerMsg = msg.toLowerCase()
+        // Guard against ambiguous timeouts: do NOT retry blindly
+        if (err instanceof Error && (err.name === 'AbortError' || lowerMsg.includes('timed out') || lowerMsg.includes('timeout') || lowerMsg.includes('etimedout') || lowerMsg.includes('econnreset'))) {
+          isAmbiguousTimeout = true
+          break
+        }
         if (!isRecipientNotAllowedError(msg)) break
+      }
+    }
+
+    if (isAmbiguousTimeout) {
+      return {
+        success: false,
+        delivered: false,
+        simulated: false,
+        shouldRetry: false,
+        mode: isLiveSendEnabled ? 'live_send' : 'test_send',
+        errorCode: 'META_AMBIGUOUS_TIMEOUT',
+        error: '[META_AMBIGUOUS_TIMEOUT] Network timeout during Meta API dispatch. Aborting retries to prevent duplicate customer messages.',
       }
     }
 
@@ -418,7 +507,8 @@ export async function dispatchBackendFlowWhatsApp(
         success: false,
         delivered: false,
         simulated: false,
-        mode: 'test_send',
+        shouldRetry: false,
+        mode: isLiveSendEnabled ? 'live_send' : 'test_send',
         errorCode: errCode,
         error: `[${errCode}] ${errMsg}`,
       }
@@ -455,11 +545,30 @@ export async function dispatchBackendFlowWhatsApp(
         .eq('account_id', accountId)
     }
 
+    // Synchronize status into restaurant feedback dispatch ledger if this is an order feedback send
+    const orderId = (vars.orderId || vars.order_id) as string | undefined
+    if (orderId && supabase?.from) {
+      try {
+        const { updateFeedbackLedgerStatus } = await import('@/lib/restaurant/feedback-eligibility')
+        await updateFeedbackLedgerStatus(supabase, {
+          accountId,
+          orderId,
+          status: 'submitted_to_meta',
+          whatsappMessageId: waMessageId,
+          templateName: templateName || null,
+          templateCategory: messageMode === 'template' ? 'MARKETING' : null,
+        })
+      } catch (ledgerErr) {
+        console.error('[whatsapp-sender] Ledger update failed:', ledgerErr)
+      }
+    }
+
     return {
       success: true,
-      delivered: true,
+      delivered: false, // Delivery is confirmed asynchronously via status webhook, not synchronously upon HTTP POST
+      submittedToMeta: true,
       simulated: false,
-      mode: 'test_send',
+      mode: isLiveSendEnabled ? 'live_send' : 'test_send',
       whatsappMessageId: waMessageId,
       messageId,
       to: destinationPhone,
@@ -482,7 +591,8 @@ export async function dispatchBackendFlowWhatsApp(
       success: false,
       delivered: false,
       simulated: false,
-      mode: 'test_send',
+      shouldRetry: false,
+      mode: isLiveSendEnabled ? 'live_send' : 'test_send',
       errorCode: 'META_DISPATCH_EXCEPTION',
       error: `[META_DISPATCH_EXCEPTION] ${errMsg}`,
     }

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   dispatchBackendFlowWhatsApp,
@@ -32,7 +33,6 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
   const ACCOUNT_A = 'acc-illusion-cafe'
   const CONVERSATION_A = 'conv-101'
   const CONTACT_A = 'con-priya-01'
-  const ORDER_A = 'ord-555'
 
   const baseRecipient: ResolvedRecipient = {
     success: true,
@@ -52,6 +52,7 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
     vi.clearAllMocks()
     delete process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND
     delete process.env.BACKEND_FLOWS_ENABLE_TEST_SEND
+    delete process.env.BACKEND_FLOWS_EMERGENCY_PAUSE
   })
 
   // Helper to build a mock Supabase client
@@ -414,7 +415,8 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
     })
 
     expect(result.success).toBe(true)
-    expect(result.delivered).toBe(true)
+    expect(result.submittedToMeta).toBe(true)
+    expect(result.delivered).toBe(false)
     expect(result.mode).toBe('test_send')
     expect(result.whatsappMessageId).toBe('wamid.HBgTESTMSG123')
     expect(sendTextMessage).toHaveBeenCalledTimes(1)
@@ -580,8 +582,8 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
 
     expect(result.success).toBe(false)
     expect(result.delivered).toBe(false)
-    expect(result.errorCode).toBe('META_DISPATCH_FAILED')
-    expect(result.error).toContain('Connection timed out')
+    expect(result.errorCode).toBe('META_AMBIGUOUS_TIMEOUT')
+    expect(result.error).toContain('Network timeout')
   })
 
   // =========================================================================
@@ -850,5 +852,171 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
     const missingRes = await validateTemplateApproved(mockDb, ACCOUNT_A, 'non_existent_tpl', 'en')
     expect(missingRes.approved).toBe(false)
     expect(missingRes.reason).toContain('does not exist')
+  })
+
+  // =========================================================================
+  // Production Sender Verification & Emergency Pause
+  // =========================================================================
+  it('Scenario M: blocks dispatch immediately when emergency shutdown is active', async () => {
+    process.env.BACKEND_FLOWS_EMERGENCY_PAUSE = 'true'
+
+    const node: BackendFlowNode = {
+      id: 'node-send-wa',
+      type: 'action',
+      position: { x: 0, y: 0 },
+      data: {
+        subType: 'whatsapp_message',
+        messageMode: 'text',
+        messageTemplate: 'Hello!',
+      },
+    }
+
+    const result = await dispatchBackendFlowWhatsApp({
+      node,
+      vars: {},
+      recipient: baseRecipient,
+      accountId: ACCOUNT_A,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.shouldRetry).toBe(false)
+    expect(result.errorCode).toBe('EMERGENCY_PAUSED')
+    delete process.env.BACKEND_FLOWS_EMERGENCY_PAUSE
+  })
+
+  it('Scenario N: rejects production live sending if sender is a Meta Test Number', async () => {
+    process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND = 'true'
+
+    const mockDb = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'whatsapp_config') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: {
+                    phone_number_id: '106540352331505', // Known Meta Developer Test Number
+                    status: 'connected',
+                    registered_at: new Date().toISOString(),
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        if (table === 'messages') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  order: vi.fn().mockReturnValue({
+                    limit: vi.fn().mockReturnValue({
+                      maybeSingle: vi.fn().mockResolvedValue({
+                        data: { created_at: new Date().toISOString() },
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {}
+      }),
+    }
+
+    const node: BackendFlowNode = {
+      id: 'node-send-wa',
+      type: 'action',
+      position: { x: 0, y: 0 },
+      data: {
+        subType: 'whatsapp_message',
+        messageMode: 'text',
+        messageTemplate: 'Hello customer!',
+      },
+    }
+
+    const result = await dispatchBackendFlowWhatsApp({
+      node,
+      vars: {},
+      recipient: baseRecipient,
+      accountId: ACCOUNT_A,
+      supabase: mockDb as any,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.shouldRetry).toBe(false)
+    expect(result.errorCode).toBe('PRODUCTION_SENDER_DISABLED')
+    expect(result.error).toContain('[PRODUCTION_SENDER_DISABLED]')
+    delete process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND
+  })
+
+  it('Scenario O: rejects production live sending if sender has no 2FA PIN registration (registered_at=null)', async () => {
+    process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND = 'true'
+
+    const mockDb = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'whatsapp_config') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: {
+                    phone_number_id: '999888777666',
+                    status: 'connected',
+                    registered_at: null, // Unregistered
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        if (table === 'messages') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  order: vi.fn().mockReturnValue({
+                    limit: vi.fn().mockReturnValue({
+                      maybeSingle: vi.fn().mockResolvedValue({
+                        data: { created_at: new Date().toISOString() },
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {}
+      }),
+    }
+
+    const node: BackendFlowNode = {
+      id: 'node-send-wa',
+      type: 'action',
+      position: { x: 0, y: 0 },
+      data: {
+        subType: 'whatsapp_message',
+        messageMode: 'text',
+        messageTemplate: 'Hello customer!',
+      },
+    }
+
+    const result = await dispatchBackendFlowWhatsApp({
+      node,
+      vars: {},
+      recipient: baseRecipient,
+      accountId: ACCOUNT_A,
+      supabase: mockDb as any,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.shouldRetry).toBe(false)
+    expect(result.errorCode).toBe('PRODUCTION_SENDER_DISABLED')
+    expect(result.error).toContain('[PRODUCTION_SENDER_DISABLED]')
+    delete process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND
   })
 })

@@ -14,6 +14,8 @@ export type ActionSubType =
   | 'http_request'
   | 'delay'
   | 'tag_contact'
+  | 'restaurant_feedback_eligibility'
+  | 'restaurant_feedback_revalidation'
 
 export type ConditionSubType = 'if_else'
 

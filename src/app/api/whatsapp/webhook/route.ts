@@ -471,6 +471,33 @@ async function handleStatusUpdate(
     failure,
   })
 
+  // 2b) Mirror onto restaurant_feedback_dispatch_ledger via whatsapp_message_id
+  //     Accurate Delivery Tracking: transitions status from submitted_to_meta to delivered/read/failed
+  if (['sent', 'delivered', 'read', 'failed'].includes(status.status)) {
+    try {
+      const ledgerPatch: Record<string, unknown> = {
+        status: status.status,
+        updated_at: new Date().toISOString(),
+      }
+      if (status.status === 'delivered') {
+        ledgerPatch.delivered_at = new Date(parseInt(status.timestamp) * 1000).toISOString()
+      }
+      if (status.status === 'failed' && failure) {
+        ledgerPatch.block_reason = `Meta delivery failure: [${failure.code}] ${failure.title}`
+      }
+      let query = supabaseAdmin()
+        .from('restaurant_feedback_dispatch_ledger')
+        .update(ledgerPatch)
+        .eq('whatsapp_message_id', status.id)
+      if (accountId) {
+        query = query.eq('account_id', accountId)
+      }
+      await query
+    } catch (ledgerErr) {
+      console.warn('[webhook] Failed to mirror status to restaurant_feedback_dispatch_ledger:', ledgerErr)
+    }
+  }
+
   // 3) Webhook fan-out for messages we store (inbox / API sends).
   //    Runs last so a slow subscriber can't delay the mirrors above.
   if (!accountId) return

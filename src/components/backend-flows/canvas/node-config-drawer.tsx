@@ -357,6 +357,8 @@ export function NodeConfigDrawer({
                       <SelectItem value="http_request">Outbound Webhook / HTTP</SelectItem>
                       <SelectItem value="delay">Delay / Timer</SelectItem>
                       <SelectItem value="tag_contact">Tag Contact</SelectItem>
+                      <SelectItem value="restaurant_feedback_eligibility">Feedback Eligibility Check</SelectItem>
+                      <SelectItem value="restaurant_feedback_revalidation">Pre-Send Revalidation</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -533,6 +535,28 @@ export function NodeConfigDrawer({
                     />
                     <p className="text-[11px] text-muted-foreground">
                       Durable delay (1 to 1,440 minutes / 24 hours). State is persisted in database and resumed automatically via scheduler.
+                    </p>
+                  </div>
+                )}
+
+                {subType === 'restaurant_feedback_eligibility' && (
+                  <div className="space-y-3 p-3.5 rounded-lg border bg-muted/20">
+                    <p className="text-xs font-medium text-foreground">
+                      🛡️ Restaurant Feedback Eligibility Check
+                    </p>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Validates that the order is completed, customer contact exists, customer has not opted out (no opt-out/DND tags), recipient is not staff, and feedback has not already been requested for this order.
+                    </p>
+                  </div>
+                )}
+
+                {subType === 'restaurant_feedback_revalidation' && (
+                  <div className="space-y-3 p-3.5 rounded-lg border bg-muted/20">
+                    <p className="text-xs font-medium text-foreground">
+                      🔍 Pre-Send Real-Time Revalidation
+                    </p>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Executed immediately following delay expiry. Re-verifies live order completion status, customer consent, idempotency ledger, and checks Meta 24-hour service window vs template requirements.
                     </p>
                   </div>
                 )}
