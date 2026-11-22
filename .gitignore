@@ -56,3 +56,4 @@ backup_*.json
 
 # Local test output
 /test-results.txt
+scratch/
