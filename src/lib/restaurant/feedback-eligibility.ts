@@ -355,7 +355,13 @@ export async function revalidateRestaurantFeedbackEligibility(
 
   // If outside 24h window, verify that an approved template exists
   if (!windowCheck.isOpen) {
-    const templateValidation = await validateTemplateApproved(supabase, accountId, 'customer_feedback', 'en')
+    let templateValidation = await validateTemplateApproved(supabase, accountId, 'customer_feedback', 'en')
+    if (!templateValidation.approved) {
+      const fallbackValidation = await validateTemplateApproved(supabase, accountId, 'illusion_cafe_service_update', 'en')
+      if (fallbackValidation.approved) {
+        templateValidation = fallbackValidation
+      }
+    }
     if (!templateValidation.approved) {
       if (!isDryRun) {
         await updateFeedbackLedgerStatus(supabase, {
@@ -371,7 +377,7 @@ export async function revalidateRestaurantFeedbackEligibility(
         skipped: true,
         shouldRetry: false,
         code: 'TEMPLATE_UNAVAILABLE_OUTSIDE_WINDOW',
-        reason: `24-hour customer service window expired, and approved template 'customer_feedback' is unavailable: ${templateValidation.reason}`,
+        reason: `24-hour customer service window expired, and approved template is unavailable: ${templateValidation.reason}`,
         windowCheck,
         order,
         contact,

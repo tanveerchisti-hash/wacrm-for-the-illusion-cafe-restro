@@ -357,12 +357,12 @@ describe('Restaurant Feedback Eligibility Adapter (feedback-eligibility.ts)', ()
   })
 
   it('pre-send revalidation verifies template approval if 24-hour customer window is closed', async () => {
-    vi.mocked(whatsappSender.checkConversationWindow).mockResolvedValueOnce({
+    vi.mocked(whatsappSender.checkConversationWindow).mockResolvedValue({
       isOpen: false,
       hoursSince: 28,
       lastInboundAt: new Date(Date.now() - 28 * 3600 * 1000).toISOString(),
     })
-    vi.mocked(whatsappSender.validateTemplateApproved).mockResolvedValueOnce({
+    vi.mocked(whatsappSender.validateTemplateApproved).mockResolvedValue({
       approved: false,
       reason: 'Template not approved in account',
     })

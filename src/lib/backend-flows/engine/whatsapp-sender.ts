@@ -185,6 +185,7 @@ export async function dispatchBackendFlowWhatsApp(
     ''
 
   const templateName = (data.templateName as string) || (data.template_name as string) || (messageMode === 'template' ? rawTemplate : undefined)
+  let activeTemplateName: string | undefined = templateName
   const templateLanguage = (data.templateLanguage as string) || (data.language as string) || 'en'
   const rawParams = (data.templateParams as string[]) || []
 
@@ -296,7 +297,15 @@ export async function dispatchBackendFlowWhatsApp(
       }
     }
 
-    const tplValidation = await validateTemplateApproved(supabase, accountId, templateName, templateLanguage)
+    activeTemplateName = templateName
+    let tplValidation = await validateTemplateApproved(supabase, accountId, activeTemplateName, templateLanguage)
+    if (!tplValidation.approved && templateName === 'customer_feedback') {
+      const fallbackValidation = await validateTemplateApproved(supabase, accountId, 'illusion_cafe_service_update', templateLanguage)
+      if (fallbackValidation.approved) {
+        tplValidation = fallbackValidation
+        activeTemplateName = 'illusion_cafe_service_update'
+      }
+    }
     if (!tplValidation.approved) {
       return {
         success: false,
@@ -305,7 +314,7 @@ export async function dispatchBackendFlowWhatsApp(
         mode: 'disabled_by_default',
         errorCode: 'UNAPPROVED_TEMPLATE',
         error: `[UNAPPROVED_TEMPLATE] ${tplValidation.reason}`,
-        templateName,
+        templateName: activeTemplateName,
       }
     }
   }
@@ -475,7 +484,7 @@ export async function dispatchBackendFlowWhatsApp(
             phoneNumberId,
             accessToken,
             to: v,
-            templateName: templateName!,
+            templateName: (activeTemplateName || templateName)!,
             language: templateLanguage,
             params: interpolatedParams,
           })
