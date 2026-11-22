@@ -35,6 +35,19 @@ vi.mock('@/components/ui/dialog', () => ({
     React.createElement('div', { 'data-slot': 'dialog-footer', className }, children),
 }))
 
+vi.mock('@/components/ui/select', () => ({
+  Select: ({ children, value }: { children: React.ReactNode; value?: string }) =>
+    React.createElement('div', { 'data-slot': 'select', 'data-value': value }, children),
+  SelectTrigger: ({ children, className, id }: { children: React.ReactNode; className?: string; id?: string }) =>
+    React.createElement('button', { 'data-slot': 'select-trigger', id, className }, children),
+  SelectValue: ({ placeholder }: { placeholder?: string }) =>
+    React.createElement('span', { 'data-slot': 'select-value' }, placeholder),
+  SelectContent: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+    React.createElement('div', { 'data-slot': 'select-content', className }, children),
+  SelectItem: ({ children, value, className }: { children: React.ReactNode; value: string; className?: string }) =>
+    React.createElement('div', { 'data-slot': 'select-item', 'data-value': value, className }, children),
+}))
+
 describe('NodeConfigDrawer UI/UX Component Tests', () => {
   const dummyTriggerNode: BackendFlowNode = {
     id: 'trigger-order-1',
@@ -144,6 +157,55 @@ describe('NodeConfigDrawer UI/UX Component Tests', () => {
     expect(markup).toContain('Trigger Subtype')
     expect(markup).toContain('Event Name')
     expect(markup).toContain('Order Created')
+    expect(markup).toContain('Order Ready')
+    expect(markup).toContain('Order Completed')
+    expect(markup).toContain('order.ready')
+    expect(markup).toContain('order.completed')
+    expect(markup).toContain('Legacy: Kitchen Ready')
+  })
+
+  it('renders Order Ready canonical event value when selected', () => {
+    const readyNode: BackendFlowNode = {
+      ...dummyTriggerNode,
+      data: {
+        ...dummyTriggerNode.data,
+        event: 'order.ready',
+      },
+    }
+    const markup = renderToStaticMarkup(
+      React.createElement(NodeConfigDrawer, {
+        node: readyNode,
+        open: true,
+        onClose: vi.fn(),
+        onUpdate: vi.fn(),
+        onDelete: vi.fn(),
+      })
+    )
+
+    expect(markup).toContain('Event Name')
+    expect(markup).toContain('data-value="order.ready"')
+  })
+
+  it('renders Order Completed canonical event value when selected', () => {
+    const completedNode: BackendFlowNode = {
+      ...dummyTriggerNode,
+      data: {
+        ...dummyTriggerNode.data,
+        event: 'order.completed',
+      },
+    }
+    const markup = renderToStaticMarkup(
+      React.createElement(NodeConfigDrawer, {
+        node: completedNode,
+        open: true,
+        onClose: vi.fn(),
+        onUpdate: vi.fn(),
+        onDelete: vi.fn(),
+      })
+    )
+
+    expect(markup).toContain('Event Name')
+    expect(markup).toContain('data-value="order.completed"')
   })
 
   it('renders Sticky Footer with Cancel and Save Draft buttons', () => {

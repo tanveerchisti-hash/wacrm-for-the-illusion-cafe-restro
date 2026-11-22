@@ -84,7 +84,7 @@ describe('Backend Flow Trigger Matcher', () => {
     const event: BackendFlowEvent = {
       accountId: 'acc-123',
       type: 'order_event',
-      event: 'order.confirmed',
+      event: 'order.kitchen_rejected',
       payload: {},
     }
     expect(matchesTrigger(wildcardFlow, event)).toBe(true)
@@ -98,6 +98,91 @@ describe('Backend Flow Trigger Matcher', () => {
       payload: {},
     }
     expect(matchesTrigger(baseFlow, event)).toBe(false)
+  })
+
+  it('matches canonical order.ready event when configured', () => {
+    const readyFlow: BackendFlow = {
+      ...baseFlow,
+      trigger_config: { event: 'order.ready' },
+    }
+    const event: BackendFlowEvent = {
+      accountId: 'acc-123',
+      type: 'order_event',
+      event: 'order.ready',
+      payload: { id: 'ord-ready-1' },
+    }
+    expect(matchesTrigger(readyFlow, event)).toBe(true)
+  })
+
+  it('matches canonical order.completed event when configured', () => {
+    const completedFlow: BackendFlow = {
+      ...baseFlow,
+      trigger_config: { event: 'order.completed' },
+    }
+    const event: BackendFlowEvent = {
+      accountId: 'acc-123',
+      type: 'order_event',
+      event: 'order.completed',
+      payload: { id: 'ord-completed-1' },
+    }
+    expect(matchesTrigger(completedFlow, event)).toBe(true)
+  })
+
+  it('matches legacy order.kitchen_ready configuration with canonical order.ready backend event', () => {
+    const legacyKitchenReadyFlow: BackendFlow = {
+      ...baseFlow,
+      trigger_config: { event: 'order.kitchen_ready' },
+    }
+    const realBackendEvent: BackendFlowEvent = {
+      accountId: 'acc-123',
+      type: 'order_event',
+      event: 'order.ready',
+      payload: { id: 'ord-1', status: 'ready' },
+    }
+    expect(matchesTrigger(legacyKitchenReadyFlow, realBackendEvent)).toBe(true)
+  })
+
+  it('matches legacy order.confirmed configuration with canonical order.created backend event', () => {
+    const legacyConfirmedFlow: BackendFlow = {
+      ...baseFlow,
+      trigger_config: { event: 'order.confirmed' },
+    }
+    const realBackendEvent: BackendFlowEvent = {
+      accountId: 'acc-123',
+      type: 'order_event',
+      event: 'order.created',
+      payload: { id: 'ord-1' },
+    }
+    expect(matchesTrigger(legacyConfirmedFlow, realBackendEvent)).toBe(true)
+  })
+
+  it('matches event defined in visual canvas trigger node when top-level trigger_config is empty', () => {
+    const canvasOnlyFlow: BackendFlow = {
+      ...baseFlow,
+      trigger_type: 'manual', // top-level not yet synchronized
+      trigger_config: {},
+      definition: {
+        nodes: [
+          {
+            id: 'node-trigger',
+            type: 'trigger',
+            position: { x: 0, y: 0 },
+            data: {
+              subType: 'order_event',
+              event: 'order.ready',
+            },
+          },
+        ],
+        edges: [],
+      },
+    }
+    const event: BackendFlowEvent = {
+      accountId: 'acc-123',
+      type: 'order_event',
+      event: 'order.ready',
+      payload: { id: 'ord-1' },
+    }
+    expect(matchesTrigger(canvasOnlyFlow, event)).toBe(true)
   })
 
   it('matches manual execution triggers', () => {

@@ -39,6 +39,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { BackendFlowNode } from '@/lib/backend-flows/types'
+import { RESTAURANT_ORDER_EVENTS } from '@/lib/restaurant/flow-integration'
 
 interface NodeConfigDrawerProps {
   node: BackendFlowNode | null
@@ -297,10 +298,17 @@ export function NodeConfigDrawer({
                         <SelectValue placeholder="Select order event" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="order.created">Order Created (order.created)</SelectItem>
-                        <SelectItem value="order.confirmed">Order Confirmed (order.confirmed)</SelectItem>
-                        <SelectItem value="order.cancelled">Order Cancelled (order.cancelled)</SelectItem>
-                        <SelectItem value="order.kitchen_ready">Kitchen Ready (order.kitchen_ready)</SelectItem>
+                        {RESTAURANT_ORDER_EVENTS.map((evt) => (
+                          <SelectItem key={evt.value} value={evt.value}>
+                            {evt.label} ({evt.value})
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="order.kitchen_ready">
+                          Legacy: Kitchen Ready (order.kitchen_ready)
+                        </SelectItem>
+                        <SelectItem value="order.confirmed">
+                          Legacy: Order Confirmed (order.confirmed)
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
