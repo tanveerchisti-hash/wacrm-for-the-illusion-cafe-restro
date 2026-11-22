@@ -5,6 +5,7 @@ import {
   maskPhoneNumber,
   type ResolvedRecipient,
 } from './recipient-resolver'
+import { dispatchBackendFlowWhatsApp } from './whatsapp-sender'
 
 /**
  * Resolves a dotted path (e.g. 'order.subtotal' or 'customer.phone') from a variable context.
@@ -182,20 +183,38 @@ export async function executeActionNode(
         }
       }
 
+      // Execute production-safe WhatsApp dispatching through Phase 5 messaging architecture
+      const accountId =
+        options?.accountId ||
+        (vars.accountId as string) ||
+        (vars.account_id as string) ||
+        ''
+
+      const dispatchResult = await dispatchBackendFlowWhatsApp({
+        node,
+        vars,
+        recipient,
+        accountId,
+        isDryRun: options?.isDryRun,
+        supabase: options?.supabase,
+      })
+
+      if (!dispatchResult.success) {
+        return {
+          success: false,
+          error: dispatchResult.error || `[${dispatchResult.errorCode || 'DISPATCH_ERROR'}] Dispatch failed.`,
+          data: {
+            ...dispatchResult,
+            to: recipient.formattedPhone || recipient.phone,
+          },
+        }
+      }
+
       return {
         success: true,
         data: {
-          delivered: false, // Phase 5 will implement real Meta delivery
-          simulated: !!options?.isDryRun,
-          formattedMessage,
+          ...dispatchResult,
           to: recipient.formattedPhone || recipient.phone,
-          recipient: {
-            contactId: recipient.contactId,
-            name: recipient.contactName,
-            phone: maskPhoneNumber(recipient.phone || ''),
-            isTestRecipient: recipient.isTestRecipient,
-            eligibleForSend: true,
-          },
         },
       }
     }

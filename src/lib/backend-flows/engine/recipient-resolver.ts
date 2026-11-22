@@ -17,6 +17,7 @@ export interface ResolvedRecipient {
   success: boolean
   contactId?: string
   contactName?: string | null
+  conversationId?: string | null
   phone?: string // Digits-only normalized for Meta API
   formattedPhone?: string // International standard with leading +
   isPhone: boolean
@@ -159,6 +160,7 @@ export async function resolveWorkflowRecipient(
   }
 
   let resolvedContactId = params.contactId ? params.contactId.trim() : null
+  let resolvedConversationId = params.conversationId ? params.conversationId.trim() : null
   let isTestOrder = !!params.isTestOrder
 
   // 2. Order relationship verification (if orderId is provided)
@@ -246,6 +248,9 @@ export async function resolveWorkflowRecipient(
     }
 
     resolvedContactId = order.contact_id
+    if (order.conversation_id) {
+      resolvedConversationId = order.conversation_id
+    }
     if (order.is_test_order !== undefined) {
       isTestOrder = !!order.is_test_order
     }
@@ -289,6 +294,9 @@ export async function resolveWorkflowRecipient(
 
       if (!resolvedContactId && conv.contact_id) {
         resolvedContactId = conv.contact_id
+      }
+      if (!resolvedConversationId) {
+        resolvedConversationId = conv.id
       }
     }
   }
@@ -433,6 +441,7 @@ export async function resolveWorkflowRecipient(
       success: true, // Recipient was identified and normalized
       contactId: contactRow.id,
       contactName: contactRow.name,
+      conversationId: resolvedConversationId,
       phone,
       formattedPhone,
       isPhone,
@@ -449,6 +458,7 @@ export async function resolveWorkflowRecipient(
     success: true,
     contactId: contactRow.id,
     contactName: contactRow.name,
+    conversationId: resolvedConversationId,
     phone,
     formattedPhone,
     isPhone,

@@ -362,18 +362,76 @@ export function NodeConfigDrawer({
                 </div>
 
                 {subType === 'whatsapp_message' && (
-                  <div className="space-y-2">
-                    <Label htmlFor="message-template" className="text-xs font-semibold text-foreground uppercase tracking-wider">
-                      Message Template / Body
-                    </Label>
-                    <Textarea
-                      id="message-template"
-                      value={(draftData.messageTemplate as string) || ''}
-                      onChange={(e) => handleFieldChange('messageTemplate', e.target.value)}
-                      placeholder="Enter WhatsApp template name or message text..."
-                      rows={3}
-                      className="min-h-[72px] rounded-lg text-sm bg-background border-border resize-y"
-                    />
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="message-mode" className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                        Delivery Mode
+                      </Label>
+                      <Select
+                        value={(draftData.messageMode as string) || (draftData.templateName ? 'template' : 'text')}
+                        onValueChange={(val) => {
+                          if (val) handleFieldChange('messageMode', val)
+                        }}
+                      >
+                        <SelectTrigger id="message-mode" className="h-10 rounded-lg bg-background border-border text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Free-form Text (Active 24h Window)</SelectItem>
+                          <SelectItem value="template">Approved Meta Template (24/7 Delivery)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">
+                        Meta policy requires approved templates when sending outside the customer&apos;s 24-hour service window.
+                      </p>
+                    </div>
+
+                    {((draftData.messageMode as string) === 'template' || Boolean(draftData.templateName)) && (
+                      <div className="space-y-3 p-3 rounded-lg border bg-muted/20">
+                        <div className="space-y-2">
+                          <Label htmlFor="template-name" className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                            Approved Template Name
+                          </Label>
+                          <Input
+                            id="template-name"
+                            value={(draftData.templateName as string) || ''}
+                            onChange={(e) => handleFieldChange('templateName', e.target.value)}
+                            placeholder="e.g. customer_feedback or order_confirmed"
+                            className="h-10 rounded-lg font-mono text-xs bg-background border-border"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="template-language" className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                            Language Code
+                          </Label>
+                          <Input
+                            id="template-language"
+                            value={(draftData.templateLanguage as string) || 'en'}
+                            onChange={(e) => handleFieldChange('templateLanguage', e.target.value)}
+                            placeholder="en or hi"
+                            className="h-10 rounded-lg text-xs bg-background border-border"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Label htmlFor="message-template" className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                        Message Content / Template Body
+                      </Label>
+                      <Textarea
+                        id="message-template"
+                        value={(draftData.messageTemplate as string) || ''}
+                        onChange={(e) => handleFieldChange('messageTemplate', e.target.value)}
+                        placeholder="Hi {{customerName}}, your order #{{orderNumber}} is ready!..."
+                        rows={3}
+                        className="min-h-[72px] rounded-lg text-sm bg-background border-border resize-y"
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        Supports dynamic variables such as &#123;&#123;customerName&#125;&#125;, &#123;&#123;orderNumber&#125;&#125;, and &#123;&#123;order.subtotal&#125;&#125;.
+                      </p>
+                    </div>
                   </div>
                 )}
 
