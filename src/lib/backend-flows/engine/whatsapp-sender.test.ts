@@ -922,6 +922,23 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
             }),
           }
         }
+        if (table === 'messages') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  order: vi.fn().mockReturnValue({
+                    limit: vi.fn().mockReturnValue({
+                      maybeSingle: vi.fn().mockResolvedValue({
+                        data: { created_at: new Date().toISOString() },
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
         return {}
       }),
     }
@@ -944,6 +961,8 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
       accountId: ACCOUNT_A,
       supabase: mockDb as any,
     })
+
+
 
     expect(result.success).toBe(false)
     expect(result.shouldRetry).toBe(false)
@@ -990,6 +1009,23 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
             }),
           }
         }
+        if (table === 'messages') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  order: vi.fn().mockReturnValue({
+                    limit: vi.fn().mockReturnValue({
+                      maybeSingle: vi.fn().mockResolvedValue({
+                        data: { created_at: new Date().toISOString() },
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
         return {}
       }),
     }
@@ -1013,10 +1049,129 @@ describe('Backend Flows WhatsApp Sender (Phase 5)', () => {
       supabase: mockDb as any,
     })
 
+
+
     expect(result.success).toBe(false)
     expect(result.shouldRetry).toBe(false)
     expect(result.errorCode).toBe('PRODUCTION_SENDER_DISABLED')
     expect(result.error).toContain('[PRODUCTION_SENDER_DISABLED]')
+    delete process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND
+  })
+
+  it('Scenario P: blocks outbound sending if node is emergency_paused on canvas', async () => {
+    const node: BackendFlowNode = {
+      id: 'node-paused-1',
+      type: 'action',
+      position: { x: 0, y: 0 },
+      data: {
+        subType: 'whatsapp_message',
+        messageMode: 'text',
+        messageTemplate: 'Hello customer!',
+        emergency_paused: true,
+      },
+    }
+
+    const result = await dispatchBackendFlowWhatsApp({
+      node,
+      vars: {},
+      recipient: baseRecipient,
+      accountId: ACCOUNT_A,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.shouldRetry).toBe(false)
+    expect(result.errorCode).toBe('EMERGENCY_PAUSED')
+  })
+
+  it('Scenario Q: blocks live sending if whatsapp_config has persistent metadata.emergency_paused=true', async () => {
+    process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND = 'true'
+    const mockDb = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'whatsapp_config') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: {
+                    status: 'connected',
+                    registered_at: '2026-10-15T10:00:00Z',
+                    phone_number_id: 'prod-waba-999',
+                    access_token: 'enc-token',
+                    metadata: { emergency_paused: true },
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        if (table === 'message_templates') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockResolvedValue({
+                  data: [
+                    {
+                      id: 'tpl-1',
+                      user_id: 'usr-1',
+                      name: 'order_feedback',
+                      body_text: 'Thank you for your order!',
+                      status: 'approved',
+                      category: 'MARKETING',
+                      language: 'en_US',
+                    },
+                  ],
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        if (table === 'messages') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  order: vi.fn().mockReturnValue({
+                    limit: vi.fn().mockReturnValue({
+                      maybeSingle: vi.fn().mockResolvedValue({
+                        data: { created_at: new Date().toISOString() },
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {}
+      }),
+    }
+
+    const node: BackendFlowNode = {
+      id: 'node-live-paused',
+      type: 'action',
+      position: { x: 0, y: 0 },
+      data: {
+        subType: 'whatsapp_message',
+        messageMode: 'template',
+        templateName: 'order_feedback',
+      },
+    }
+
+    const result = await dispatchBackendFlowWhatsApp({
+      node,
+      vars: {},
+      recipient: baseRecipient,
+      accountId: ACCOUNT_A,
+      supabase: mockDb as any,
+    })
+
+
+
+    expect(result.success).toBe(false)
+    expect(result.shouldRetry).toBe(false)
+    expect(result.errorCode).toBe('EMERGENCY_PAUSED')
     delete process.env.BACKEND_FLOWS_ENABLE_LIVE_SEND
   })
 })

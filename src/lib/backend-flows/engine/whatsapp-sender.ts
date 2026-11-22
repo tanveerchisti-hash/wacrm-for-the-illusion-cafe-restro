@@ -219,8 +219,12 @@ export async function dispatchBackendFlowWhatsApp(
     }
   }
 
-  // 3. Emergency Shutdown Guard
-  if (process.env.BACKEND_FLOWS_EMERGENCY_PAUSE === 'true') {
+  // 3. Emergency Shutdown Guard (Environment flag & canvas/node-level persistent killswitch)
+  if (
+    process.env.BACKEND_FLOWS_EMERGENCY_PAUSE === 'true' ||
+    node.data?.emergency_paused === true ||
+    node.data?.is_paused === true
+  ) {
     return {
       success: false,
       delivered: false,
@@ -339,6 +343,20 @@ export async function dispatchBackendFlowWhatsApp(
         mode: 'live_send',
         errorCode: 'PRODUCTION_SENDER_DISABLED',
         error: `[PRODUCTION_SENDER_DISABLED] Outbound live messaging is disabled. No verified production sender configured for account ${accountId}.`,
+      }
+    }
+
+    // Database-level account pause guard (metadata.emergency_paused / metadata.outbound_paused)
+    const configMeta = (config.metadata || {}) as Record<string, unknown>
+    if (configMeta.emergency_paused === true || configMeta.outbound_paused === true) {
+      return {
+        success: false,
+        delivered: false,
+        simulated: false,
+        shouldRetry: false,
+        mode: 'live_send',
+        errorCode: 'EMERGENCY_PAUSED',
+        error: '[EMERGENCY_PAUSED] Outbound messaging is currently suspended by persistent account configuration.',
       }
     }
 

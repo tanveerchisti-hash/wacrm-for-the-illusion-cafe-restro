@@ -10,15 +10,16 @@ vi.mock('@/lib/automations/admin-client', () => ({
           select: () => ({ maybeSingle: async () => ({ data: null, error: null }) }),
         }),
       }),
-      select: () => ({
-        eq: () => ({
-          lte: () => ({
-            order: () => ({
-              limit: async () => ({ data: [], error: null }),
-            }),
-          }),
-        }),
-      }),
+      select: () => {
+        const chain: Record<string, unknown> = {}
+        chain.eq = () => chain
+        chain.lte = () => chain
+        chain.lt = () => chain
+        chain.or = () => chain
+        chain.order = () => chain
+        chain.limit = async () => ({ data: [], error: null })
+        return chain
+      },
     }),
   }),
 }))

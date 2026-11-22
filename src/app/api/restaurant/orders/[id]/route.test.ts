@@ -18,10 +18,19 @@ vi.mock('@/lib/restaurant/flow-integration', () => ({
   dispatchRestaurantOrderFlowEvent: vi.fn(),
 }))
 
-vi.mock('@/lib/restaurant/order-outbox', () => ({
-  enqueueOrderOutboxEvent: vi.fn().mockResolvedValue({ enqueued: true, outboxId: 'outbox-1' }),
-  dispatchOutboxEventRecord: vi.fn().mockResolvedValue(true),
-}))
+vi.mock('@/lib/restaurant/order-outbox', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('@/lib/restaurant/order-outbox')
+  return {
+    ...actual,
+    transitionOrderStatusAtomically: vi.fn((...args: unknown[]) =>
+      (actual.transitionOrderStatusAtomically as (...a: unknown[]) => unknown)(...args)
+    ),
+    enqueueOrderOutboxEvent: vi.fn((...args: unknown[]) =>
+      (actual.enqueueOrderOutboxEvent as (...a: unknown[]) => unknown)(...args)
+    ),
+    dispatchOutboxEventRecord: vi.fn().mockResolvedValue(true),
+  }
+})
 
 vi.mock('@/lib/restaurant/order-trial', () => ({
   getTrialOrderTimers: vi.fn().mockResolvedValue([]),
@@ -38,6 +47,14 @@ describe('GET & PATCH /api/restaurant/orders/[id]', () => {
 
   const mockSupabase = {
     from: vi.fn().mockReturnValue({
+      insert: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { id: 'outbox-1' },
+            error: null,
+          }),
+        }),
+      }),
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
@@ -144,12 +161,12 @@ describe('GET & PATCH /api/restaurant/orders/[id]', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.success).toBe(true)
-    expect(orderOutbox.enqueueOrderOutboxEvent).toHaveBeenCalledWith(
+    expect(orderOutbox.transitionOrderStatusAtomically).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         accountId: 'acc-1',
         orderId: 'ord-123',
-        eventType: 'order.completed',
+        newStatus: 'completed',
       })
     )
     expect(orderOutbox.dispatchOutboxEventRecord).toHaveBeenCalled()

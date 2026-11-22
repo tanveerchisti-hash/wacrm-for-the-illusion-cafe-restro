@@ -218,3 +218,127 @@ BEGIN
 END;
 $$;
 
+-- PART 5: Atomic Order Transition & Outbox Enqueue RPC
+-- Atomically updates order status and enqueues lifecycle event into outbox in a single DB transaction.
+CREATE OR REPLACE FUNCTION public.transition_restaurant_order_status(
+  p_account_id UUID,
+  p_order_id UUID,
+  p_new_status TEXT,
+  p_cancellation_reason TEXT DEFAULT NULL,
+  p_updated_by UUID DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_order restaurant_trial_orders%ROWTYPE;
+  v_outbox_id UUID := NULL;
+  v_event_type TEXT := NULL;
+  v_payload JSONB := '{}'::jsonb;
+BEGIN
+  -- 1. Lock the order row FOR UPDATE to prevent concurrent race conditions
+  SELECT * INTO v_order
+  FROM restaurant_trial_orders
+  WHERE id = p_order_id AND account_id = p_account_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Order not found',
+      'code', 'ORDER_NOT_FOUND'
+    );
+  END IF;
+
+  -- 2. Guard: Cannot update cancelled or rejected orders
+  IF v_order.status IN ('cancelled', 'kitchen_rejected') THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Cannot update order with status ' || v_order.status,
+      'code', 'INVALID_TRANSITION'
+    );
+  END IF;
+
+  -- 3. Guard: Prevent duplicate transition events if already in target status
+  IF v_order.status = p_new_status THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'order', to_jsonb(v_order),
+      'unchanged', true
+    );
+  END IF;
+
+  -- 4. Update the order row
+  UPDATE restaurant_trial_orders
+  SET status = p_new_status,
+      kitchen_rejection_reason = CASE
+        WHEN p_new_status = 'cancelled' AND p_cancellation_reason IS NOT NULL THEN p_cancellation_reason
+        ELSE kitchen_rejection_reason
+      END,
+      updated_at = NOW()
+  WHERE id = p_order_id AND account_id = p_account_id
+  RETURNING * INTO v_order;
+
+  -- 5. Determine event type and build payload
+  IF p_new_status = 'completed' THEN
+    v_event_type := 'order.completed';
+  ELSIF p_new_status = 'cancelled' THEN
+    v_event_type := 'order.cancelled';
+  ELSIF p_new_status = 'ready' THEN
+    v_event_type := 'order.ready';
+  END IF;
+
+  -- 6. Atomically insert outbox event within the exact same transaction
+  IF v_event_type IS NOT NULL THEN
+    v_payload := jsonb_build_object(
+      'orderId', v_order.id,
+      'orderNumber', v_order.order_number,
+      'status', v_order.status,
+      'subtotal', v_order.subtotal,
+      'deliveryFee', v_order.delivery_fee,
+      'totalAmount', v_order.total_amount,
+      'fulfilmentType', v_order.fulfilment_type,
+      'deliveryAddress', v_order.delivery_address,
+      'paymentMethod', v_order.payment_method,
+      'paymentStatus', v_order.payment_status,
+      'isTestOrder', COALESCE(v_order.is_test_order, false),
+      'contactId', v_order.contact_id,
+      'conversationId', v_order.conversation_id,
+      'updatedBy', p_updated_by,
+      'cancellationReason', p_cancellation_reason
+    );
+
+    INSERT INTO restaurant_order_outbox_events (
+      account_id,
+      order_id,
+      event_type,
+      payload,
+      status
+    )
+    VALUES (
+      p_account_id,
+      p_order_id,
+      v_event_type,
+      v_payload,
+      'pending'
+    )
+    ON CONFLICT (account_id, order_id, event_type) DO NOTHING
+    RETURNING id INTO v_outbox_id;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'order', to_jsonb(v_order),
+    'outbox_id', v_outbox_id,
+    'event_type', v_event_type,
+    'unchanged', false
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.transition_restaurant_order_status(UUID, UUID, TEXT, TEXT, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.transition_restaurant_order_status(UUID, UUID, TEXT, TEXT, UUID) TO authenticated, service_role;
+
+

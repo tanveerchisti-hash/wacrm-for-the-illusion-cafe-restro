@@ -2,8 +2,14 @@ import { NextResponse } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { getTrialOrderTimers, type TrialOrderStatus } from '@/lib/restaurant/order-trial'
 import { isRestaurantTrialEnabled } from '@/lib/restaurant/feature-flag'
-import { dispatchRestaurantOrderFlowEvent } from '@/lib/restaurant/flow-integration'
-import { enqueueOrderOutboxEvent, dispatchOutboxEventRecord } from '@/lib/restaurant/order-outbox'
+import {
+  dispatchRestaurantOrderFlowEvent,
+  type RestaurantOrderEventType,
+} from '@/lib/restaurant/flow-integration'
+import {
+  dispatchOutboxEventRecord,
+  transitionOrderStatusAtomically,
+} from '@/lib/restaurant/order-outbox'
 
 interface RouteContext {
   params: Promise<{ id: string }>
@@ -75,67 +81,35 @@ export async function PATCH(request: Request, context: RouteContext) {
       )
     }
 
-    // 1. Fetch current order to validate conditional transition
-    const { data: existingOrder, error: fetchErr } = await ctx.supabase
-      .from('restaurant_trial_orders')
-      .select('*')
-      .eq('id', orderId)
-      .eq('account_id', ctx.accountId)
-      .maybeSingle()
+    // 1. Atomically transition order status and enqueue outbox event in database
+    const transitionResult = await transitionOrderStatusAtomically(ctx.supabase, {
+      accountId: ctx.accountId,
+      orderId,
+      newStatus: body.status,
+      cancellationReason: body.cancellation_reason || null,
+      updatedBy: ctx.userId,
+    })
 
-    if (fetchErr || !existingOrder) {
-      return NextResponse.json({ error: 'Order not found' }, { status: 404 })
-    }
-
-    // Guard: Terminal/cancelled orders cannot transition
-    if (existingOrder.status === 'cancelled' || existingOrder.status === 'kitchen_rejected') {
+    if (!transitionResult.success) {
+      const statusCode = transitionResult.code === 'ORDER_NOT_FOUND' ? 404 : 409
       return NextResponse.json(
-        { error: `Cannot update order with status '${existingOrder.status}'` },
-        { status: 409 }
+        { error: transitionResult.error || 'Failed to update order' },
+        { status: statusCode }
       )
     }
 
-    // Guard: Prevent duplicate transition events if order is already in target status
-    if (existingOrder.status === body.status) {
-      return NextResponse.json({ success: true, order: existingOrder, unchanged: true })
+    if (transitionResult.unchanged) {
+      return NextResponse.json({ success: true, order: transitionResult.order, unchanged: true })
     }
 
-    const updateFields: Record<string, unknown> = {
-      status: body.status,
-      updated_at: new Date().toISOString(),
-    }
+    const updatedOrder = transitionResult.order!
 
-    if (body.status === 'cancelled' && body.cancellation_reason) {
-      updateFields.kitchen_rejection_reason = body.cancellation_reason
-    }
-
-    const { data: updatedOrder, error } = await ctx.supabase
-      .from('restaurant_trial_orders')
-      .update(updateFields)
-      .eq('id', orderId)
-      .eq('account_id', ctx.accountId)
-      .select()
-      .maybeSingle()
-
-    if (error || !updatedOrder) {
-      return NextResponse.json({ error: 'Failed to update order' }, { status: 404 })
-    }
-
-    // Determine backend flow event based on new status
-    let eventName: 'order.ready' | 'order.completed' | 'order.cancelled' = 'order.ready'
-    if (body.status === 'completed') {
-      eventName = 'order.completed'
-    } else if (body.status === 'cancelled') {
-      eventName = 'order.cancelled'
-    }
-
-    // For order.completed, use durable transactional outbox to guarantee reliable at-least-once delivery
-    // and database-level unique constraint idempotency.
-    if (eventName === 'order.completed') {
-      const outboxResult = await enqueueOrderOutboxEvent(ctx.supabase, {
+    // 2. If outbox event was generated (e.g. order.completed), trigger immediate dispatch
+    if (transitionResult.outboxId) {
+      await dispatchOutboxEventRecord(ctx.supabase, transitionResult.outboxId, {
         accountId: ctx.accountId,
         orderId: updatedOrder.id,
-        eventType: 'order.completed',
+        eventType: (transitionResult.eventType as RestaurantOrderEventType) || 'order.completed',
         order: updatedOrder,
         contactId: updatedOrder.contact_id,
         conversationId: updatedOrder.conversation_id,
@@ -144,25 +118,10 @@ export async function PATCH(request: Request, context: RouteContext) {
           cancellationReason: body.cancellation_reason || null,
         },
       })
-
-      if (outboxResult.enqueued && outboxResult.outboxId) {
-        await dispatchOutboxEventRecord(ctx.supabase, outboxResult.outboxId, {
-          accountId: ctx.accountId,
-          orderId: updatedOrder.id,
-          eventType: 'order.completed',
-          order: updatedOrder,
-          contactId: updatedOrder.contact_id,
-          conversationId: updatedOrder.conversation_id,
-          extraPayload: {
-            updatedBy: ctx.userId,
-            cancellationReason: body.cancellation_reason || null,
-          },
-        })
-      }
-    } else {
+    } else if (transitionResult.eventType && transitionResult.eventType !== 'order.completed') {
       await dispatchRestaurantOrderFlowEvent({
         accountId: ctx.accountId,
-        event: eventName,
+        event: transitionResult.eventType as RestaurantOrderEventType,
         order: updatedOrder,
         extraPayload: {
           updatedBy: ctx.userId,

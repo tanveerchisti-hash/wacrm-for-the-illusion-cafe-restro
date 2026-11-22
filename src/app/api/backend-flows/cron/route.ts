@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { sweepDueWaitingRuns } from '@/lib/backend-flows/engine/scheduler'
+import { sweepPendingOrderOutboxEvents } from '@/lib/restaurant/order-outbox'
 
 /**
  * GET /api/backend-flows/cron
@@ -38,12 +39,15 @@ export async function GET(request: Request) {
       batchSize: 50,
     })
 
+    const outboxSummary = await sweepPendingOrderOutboxEvents(admin, 25)
+
     return NextResponse.json({
       success: true,
       processed: summary.processed,
       reclaimed: summary.reclaimed,
       skipped: summary.skipped,
       errors: summary.errors,
+      outbox: outboxSummary,
     })
   } catch (err) {
     console.error('[backend-flows-cron] Sweep error:', err)
