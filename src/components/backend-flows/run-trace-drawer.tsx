@@ -37,7 +37,8 @@ export function RunTraceDrawer({ open, onOpenChange, run }: RunTraceDrawerProps)
   if (!run) return null
 
   const isSuccess = run.status === 'completed'
-  const isRunning = run.status === 'running'
+  const isRunning = run.status === 'running' || run.status === 'resuming'
+  const isWaiting = run.status === 'waiting'
 
   const state = (run.state || {}) as Partial<FlowExecutionState>
   const stepRuns: StepExecutionResult[] = state.stepRuns || []
@@ -69,6 +70,8 @@ export function RunTraceDrawer({ open, onOpenChange, run }: RunTraceDrawerProps)
                 className={
                   isSuccess
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                    : isWaiting
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                     : isRunning
                     ? 'bg-sky-500/10 text-sky-400 border-sky-500/30'
                     : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
@@ -91,6 +94,11 @@ export function RunTraceDrawer({ open, onOpenChange, run }: RunTraceDrawerProps)
           <SheetDescription className="text-xs">
             Triggered via <span className="font-semibold text-foreground">{run.triggered_by}</span> at{' '}
             {new Date(run.created_at).toLocaleString()}
+            {run.waiting_until && isWaiting && (
+              <span className="block mt-1 text-amber-400 font-mono text-[11px]">
+                Scheduled resumption at: {new Date(run.waiting_until).toLocaleString()}
+              </span>
+            )}
           </SheetDescription>
         </SheetHeader>
 

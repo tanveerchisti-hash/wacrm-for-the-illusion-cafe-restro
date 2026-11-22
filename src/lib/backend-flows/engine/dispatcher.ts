@@ -124,32 +124,54 @@ export async function executeWorkflowRun(
     previousStepRuns: claim.previousStepRuns,
   })
 
-  // 6. Persist final execution state to backend_flow_runs
+  // 6. Persist final or waiting execution state to backend_flow_runs
   if (supabase?.from) {
     try {
-      await supabase
-        .from('backend_flow_runs')
-        .update({
-          status: executionState.status,
-          state: {
-            variables: executionState.variables,
-            step_runs: executionState.stepRuns,
-            idempotency_key: idempotencyKey,
-          },
-          error_message: executionState.errorMessage || null,
-          completed_at: executionState.completedAt,
-          duration_ms: executionState.durationMs,
-        })
-        .eq('id', runId)
+      if (executionState.status === 'waiting') {
+        await supabase
+          .from('backend_flow_runs')
+          .update({
+            status: 'waiting',
+            waiting_until: executionState.waitingUntil,
+            waiting_node_id: executionState.waitingNodeId,
+            state: {
+              variables: executionState.variables,
+              step_runs: executionState.stepRuns,
+              pending_node_ids: executionState.pendingNodeIds,
+              waiting_node_id: executionState.waitingNodeId,
+              waiting_until: executionState.waitingUntil,
+              definition_snapshot: flow.definition,
+              idempotency_key: idempotencyKey,
+            },
+            completed_at: null,
+            duration_ms: executionState.durationMs,
+          })
+          .eq('id', runId)
+      } else {
+        await supabase
+          .from('backend_flow_runs')
+          .update({
+            status: executionState.status,
+            state: {
+              variables: executionState.variables,
+              step_runs: executionState.stepRuns,
+              idempotency_key: idempotencyKey,
+            },
+            error_message: executionState.errorMessage || null,
+            completed_at: executionState.completedAt,
+            duration_ms: executionState.durationMs,
+          })
+          .eq('id', runId)
 
-      // Update execution counter and timestamp on flow
-      await supabase
-        .from('backend_flows')
-        .update({
-          execution_count: (flow.execution_count || 0) + 1,
-          last_executed_at: new Date().toISOString(),
-        })
-        .eq('id', flow.id)
+        // Update execution counter and timestamp on flow when run has reached terminal completion
+        await supabase
+          .from('backend_flows')
+          .update({
+            execution_count: (flow.execution_count || 0) + 1,
+            last_executed_at: new Date().toISOString(),
+          })
+          .eq('id', flow.id)
+      }
     } catch (err) {
       console.error('[backend-flows] Failed to persist final run record:', err)
     }

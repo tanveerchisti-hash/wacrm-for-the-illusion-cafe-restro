@@ -2,7 +2,7 @@ import type { BackendFlowDefinition, BackendFlowNode } from '../types'
 import type { FlowExecutionState, StepExecutionResult } from './types'
 import { executeActionNode, evaluateConditionNode } from './actions'
 
-interface GraphRunnerOptions {
+export interface GraphRunnerOptions {
   runId: string
   flowId: string
   accountId: string
@@ -13,6 +13,7 @@ interface GraphRunnerOptions {
   isDryRun?: boolean
   previousStepRuns?: StepExecutionResult[]
   idempotencyKey?: string
+  resumeFromNodeIds?: string[]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase?: any
 }
@@ -37,19 +38,40 @@ export async function executeFlowGraph(
     nodeMap.set(n.id, n)
   }
 
-  // Find root triggers
+  // Find root triggers if starting fresh, or resume from provided frontier node IDs
   const triggerNodes = nodes.filter((n) => n.type === 'trigger')
   const startNodes = triggerNodes.length > 0 ? triggerNodes : [nodes[0]].filter(Boolean)
 
-  const variables: Record<string, unknown> = { ...options.initialVariables }
-  const stepRuns: StepExecutionResult[] = []
+  const isResuming = Boolean(options.resumeFromNodeIds && options.resumeFromNodeIds.length > 0)
 
-  // Queue of node IDs to visit
-  const queue: string[] = startNodes.map((n) => n.id)
+  const queue: string[] = isResuming
+    ? [...options.resumeFromNodeIds!]
+    : startNodes.map((n) => n.id)
+
+  const variables: Record<string, unknown> = { ...options.initialVariables }
+
+  // If resuming from a frontier, retain previously completed steps; otherwise start fresh to allow action-level reuse tracking
+  const stepRuns: StepExecutionResult[] = isResuming && options.previousStepRuns
+    ? [...options.previousStepRuns]
+    : []
+
   const visited = new Set<string>()
+  if (isResuming && options.previousStepRuns) {
+    for (const step of options.previousStepRuns) {
+      if (step.status === 'completed') {
+        visited.add(step.nodeId)
+      }
+    }
+    for (const resumeId of options.resumeFromNodeIds!) {
+      visited.delete(resumeId)
+    }
+  }
 
   let overallStatus: FlowExecutionState['status'] = 'completed'
   let flowErrorMessage: string | undefined
+  let waitingUntil: string | undefined
+  let waitingNodeId: string | undefined
+  let pendingNodeIds: string[] | undefined
 
   while (queue.length > 0) {
     // Check timeout
@@ -193,7 +215,26 @@ export async function executeFlowGraph(
           output: actionOutput.data,
         })
 
-        // Enqueue next nodes
+        // Production Durable Delay Handling:
+        // In live execution, delay pauses traversal, persists the execution frontier, and returns 'waiting'.
+        // In dry-run simulation mode (options.isDryRun), execution continues immediately across downstream nodes.
+        if (subType === 'delay' && !options.isDryRun) {
+          const nextEdges = edges.filter((e) => e.source === node.id)
+          const frontierNodeIds: string[] = []
+          for (const edge of nextEdges) {
+            if (!visited.has(edge.target)) {
+              frontierNodeIds.push(edge.target)
+            }
+          }
+
+          overallStatus = 'waiting'
+          waitingUntil = (actionOutput.data?.waitingUntil as string) || (actionOutput.data?.scheduledResumeAt as string)
+          waitingNodeId = node.id
+          pendingNodeIds = Array.from(new Set([...queue, ...frontierNodeIds]))
+          break
+        }
+
+        // Enqueue next nodes (for non-delay actions, or for delay in dry-run simulation mode)
         const nextEdges = edges.filter((e) => e.source === node.id)
         for (const edge of nextEdges) {
           if (!visited.has(edge.target)) {
@@ -223,7 +264,7 @@ export async function executeFlowGraph(
     }
   }
 
-  const completedAt = new Date().toISOString()
+  const completedAt = overallStatus === 'waiting' ? undefined : new Date().toISOString()
   const totalDurationMs = Date.now() - startTime
 
   return {
@@ -239,5 +280,8 @@ export async function executeFlowGraph(
     completedAt,
     durationMs: totalDurationMs,
     idempotencyKey: options.idempotencyKey,
+    waitingUntil,
+    waitingNodeId,
+    pendingNodeIds,
   }
 }

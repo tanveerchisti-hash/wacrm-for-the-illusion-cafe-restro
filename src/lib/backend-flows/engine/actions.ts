@@ -291,12 +291,49 @@ export async function executeActionNode(
     }
 
     case 'delay': {
-      const delayMinutes = (data.delayMinutes as number) || 1
+      const rawMinutes = data.delayMinutes ?? data.waitDuration
+      const delayMinutes =
+        typeof rawMinutes === 'number' && !isNaN(rawMinutes) && rawMinutes > 0
+          ? Math.min(1440, rawMinutes)
+          : 1
+
+      const rawSeconds = data.delaySeconds
+      const delaySeconds =
+        typeof rawSeconds === 'number' && !isNaN(rawSeconds) && rawSeconds > 0
+          ? rawSeconds
+          : undefined
+
+      const delayMs =
+        delaySeconds !== undefined
+          ? Math.round(delaySeconds * 1000)
+          : Math.round(delayMinutes * 60 * 1000)
+
+      const scheduledResumeAt = new Date(Date.now() + delayMs).toISOString()
+
+      if (options?.isDryRun) {
+        return {
+          success: true,
+          data: {
+            simulated: true,
+            delayScheduled: true,
+            delayMinutes,
+            delaySeconds,
+            delayMs,
+            hypotheticalResumeAt: scheduledResumeAt,
+            note: 'Dry-run simulation: delay evaluated immediately without pausing execution',
+          },
+        }
+      }
+
       return {
         success: true,
         data: {
           delayScheduled: true,
           delayMinutes,
+          delaySeconds,
+          delayMs,
+          scheduledResumeAt,
+          waitingUntil: scheduledResumeAt,
         },
       }
     }

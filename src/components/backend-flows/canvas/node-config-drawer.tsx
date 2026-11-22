@@ -467,9 +467,15 @@ export function NodeConfigDrawer({
                       min={1}
                       max={1440}
                       value={(draftData.delayMinutes as number) || 5}
-                      onChange={(e) => handleFieldChange('delayMinutes', Number(e.target.value))}
+                      onChange={(e) => {
+                        const val = Number(e.target.value)
+                        handleFieldChange('delayMinutes', isNaN(val) ? 5 : Math.max(1, Math.min(1440, val)))
+                      }}
                       className="h-10 rounded-lg text-sm bg-background border-border"
                     />
+                    <p className="text-[11px] text-muted-foreground">
+                      Durable delay (1 to 1,440 minutes / 24 hours). State is persisted in database and resumed automatically via scheduler.
+                    </p>
                   </div>
                 )}
               </div>
