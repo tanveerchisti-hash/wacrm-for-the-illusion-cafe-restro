@@ -14,6 +14,75 @@ export type RestaurantOrderEventType =
   | 'order.completed'
   | 'order.cancelled'
 
+/**
+ * Legacy aliases for order event identifiers to guarantee backward compatibility
+ * for workflows configured prior to Phase 1 trigger engine fixes.
+ */
+export const ORDER_EVENT_ALIASES: Record<string, RestaurantOrderEventType> = {
+  'order.kitchen_ready': 'order.ready',
+  'order.confirmed': 'order.created',
+}
+
+/**
+ * Normalizes an event name string, resolving known aliases to canonical backend event names.
+ */
+export function normalizeOrderEventName(eventName: string): string {
+  const lower = (eventName || '').trim().toLowerCase()
+  return ORDER_EVENT_ALIASES[lower] || lower
+}
+
+export interface RestaurantOrderEventMetadata {
+  value: RestaurantOrderEventType
+  label: string
+  description: string
+}
+
+/**
+ * Canonical registry of real backend restaurant order lifecycle events.
+ */
+export const RESTAURANT_ORDER_EVENTS: RestaurantOrderEventMetadata[] = [
+  {
+    value: 'order.created',
+    label: 'Order Created (Placed)',
+    description: 'Triggered when customer places and confirms order cart',
+  },
+  {
+    value: 'order.ready',
+    label: 'Order Ready (Kitchen Ready)',
+    description: 'Triggered when food preparation finishes and is ready for serving/pickup',
+  },
+  {
+    value: 'order.completed',
+    label: 'Order Completed (Served/Delivered)',
+    description: 'Triggered when order is fulfilled, handed over, or delivered to customer',
+  },
+  {
+    value: 'order.kitchen_accepted',
+    label: 'Kitchen Accepted',
+    description: 'Triggered when kitchen staff accepts incoming order',
+  },
+  {
+    value: 'order.kitchen_rejected',
+    label: 'Kitchen Rejected',
+    description: 'Triggered when kitchen rejects order with reason',
+  },
+  {
+    value: 'order.preparing',
+    label: 'Preparation Started',
+    description: 'Triggered when kitchen begins timer countdown preparation',
+  },
+  {
+    value: 'order.payment_verified',
+    label: 'Payment Verified',
+    description: 'Triggered when cash or UPI payment is verified by staff',
+  },
+  {
+    value: 'order.cancelled',
+    label: 'Order Cancelled',
+    description: 'Triggered when order is cancelled by customer or staff',
+  },
+]
+
 export interface DispatchRestaurantEventOptions {
   accountId: string
   contactId?: string | null

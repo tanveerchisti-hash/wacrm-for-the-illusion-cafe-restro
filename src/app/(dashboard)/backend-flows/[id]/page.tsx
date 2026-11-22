@@ -223,6 +223,33 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
       }
     }
 
+    // Synchronize top-level trigger_type and trigger_config with visual canvas trigger node
+    let effectiveTriggerType = triggerType
+    let effectiveTriggerConfig = { ...parsedTriggerConfig }
+
+    const triggerNode = parsedDefinition?.nodes?.find((n) => n.type === 'trigger')
+    if (triggerNode?.data) {
+      if (triggerNode.data.subType) {
+        effectiveTriggerType = triggerNode.data.subType as BackendFlowTriggerType
+      }
+      if (triggerNode.data.subType === 'order_event') {
+        effectiveTriggerConfig = {
+          ...effectiveTriggerConfig,
+          event: triggerNode.data.event || (effectiveTriggerConfig as Record<string, unknown>).event || 'order.created',
+        }
+      } else if (triggerNode.data.subType === 'schedule') {
+        effectiveTriggerConfig = {
+          ...effectiveTriggerConfig,
+          cronExpression: triggerNode.data.cronExpression || (effectiveTriggerConfig as Record<string, unknown>).cronExpression || '*/15 * * * *',
+        }
+      } else if (triggerNode.data.subType === 'webhook') {
+        effectiveTriggerConfig = {
+          ...effectiveTriggerConfig,
+          endpointUrl: triggerNode.data.endpointUrl || (effectiveTriggerConfig as Record<string, unknown>).endpointUrl,
+        }
+      }
+    }
+
     setSaving(true)
     try {
       const res = await fetch(`/api/backend-flows/${id}`, {
@@ -233,8 +260,8 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
           slug: slug.trim(),
           description: description.trim() || null,
           category,
-          trigger_type: triggerType,
-          trigger_config: parsedTriggerConfig,
+          trigger_type: effectiveTriggerType,
+          trigger_config: effectiveTriggerConfig,
           definition: parsedDefinition,
           metadata: {
             ...flow?.metadata,
@@ -250,6 +277,8 @@ export default function BackendFlowDetailPage({ params }: PageProps) {
       setFlow(data.flow)
       setCanvasDefinition(parsedDefinition)
       setDefinitionStr(JSON.stringify(parsedDefinition, null, 2))
+      setTriggerType(effectiveTriggerType)
+      setTriggerConfigStr(JSON.stringify(effectiveTriggerConfig, null, 2))
       toast.success('Workflow draft saved successfully!')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Save failed')

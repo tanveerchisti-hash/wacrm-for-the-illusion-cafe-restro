@@ -1,5 +1,6 @@
 import type { BackendFlow } from '../types'
 import type { BackendFlowEvent } from './types'
+import { normalizeOrderEventName } from '@/lib/restaurant/flow-integration'
 
 interface MatcherOptions {
   allowDraft?: boolean
@@ -7,6 +8,7 @@ interface MatcherOptions {
 
 /**
  * Evaluates whether an incoming event matches a backend flow's configured trigger.
+ * Supports canonical events, visual canvas trigger nodes, and legacy alias normalization.
  */
 export function matchesTrigger(
   flow: BackendFlow,
@@ -29,24 +31,42 @@ export function matchesTrigger(
     return false
   }
 
-  // Trigger type check
-  if (flow.trigger_type !== event.type) {
+  // Inspect both top-level metadata and visual canvas trigger node
+  const canvasTriggerNode = flow.definition?.nodes?.find((n) => n.type === 'trigger')
+  const canvasSubType = canvasTriggerNode?.data?.subType as string | undefined
+  const canvasEvent = canvasTriggerNode?.data?.event as string | undefined
+
+  // Trigger type check: matches top-level trigger_type or canvas trigger node subType
+  const triggerTypeMatches =
+    flow.trigger_type === event.type || canvasSubType === event.type
+
+  if (!triggerTypeMatches) {
     return false
   }
 
+  const effectiveTriggerType = flow.trigger_type === event.type ? flow.trigger_type : canvasSubType
   const config = (flow.trigger_config || {}) as Record<string, unknown>
 
-  switch (flow.trigger_type) {
+  switch (effectiveTriggerType) {
     case 'order_event': {
-      const configuredEvent = (config.event as string) || '*'
+      const configuredEvent =
+        (config.event as string) || canvasEvent || '*'
+
       if (configuredEvent === '*' || !configuredEvent) {
         return true
       }
-      return configuredEvent.toLowerCase() === (event.event || '').toLowerCase()
+
+      const normalizedConfigured = normalizeOrderEventName(configuredEvent)
+      const normalizedIncoming = normalizeOrderEventName(event.event || '')
+
+      return normalizedConfigured === normalizedIncoming
     }
 
     case 'webhook': {
-      const configuredPath = config.path as string | undefined
+      const configuredPath =
+        (config.path as string | undefined) ||
+        (canvasTriggerNode?.data?.endpointUrl as string | undefined)
+
       if (!configuredPath) return true
       const incomingPath = (event.payload?.path as string) || ''
       return configuredPath.toLowerCase() === incomingPath.toLowerCase()
@@ -61,7 +81,9 @@ export function matchesTrigger(
     }
 
     case 'system_event': {
-      const configuredEvent = (config.event as string) || '*'
+      const configuredEvent =
+        (config.event as string) || canvasEvent || '*'
+
       if (configuredEvent === '*' || !configuredEvent) return true
       return configuredEvent.toLowerCase() === (event.event || '').toLowerCase()
     }
