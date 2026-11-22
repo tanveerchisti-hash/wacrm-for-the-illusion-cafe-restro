@@ -205,6 +205,14 @@ vi.mock('@supabase/supabase-js', () => ({
               }
             },
           }
+        case 'restaurant_feedback_dispatch_ledger': {
+          const chain: Record<string, unknown> = {}
+          chain.eq = () => chain
+          chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+          return {
+            update: () => chain,
+          }
+        }
         default:
           throw new Error(`unexpected table: ${table}`)
       }

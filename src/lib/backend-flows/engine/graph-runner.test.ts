@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from 'vitest'
 import { executeFlowGraph } from './graph-runner'
 import type { BackendFlowDefinition } from '../types'
@@ -155,5 +156,77 @@ describe('Backend Flow Graph Runner', () => {
 
     expect(result.status).toBe('failed')
     expect(result.errorMessage).toContain('Endpoint URL is empty')
+  })
+
+  it('safely skips execution when an eligibility action returns skipped=true without retrying', async () => {
+    const definition: BackendFlowDefinition = {
+      nodes: [
+        {
+          id: 'trig-1',
+          type: 'trigger',
+          position: { x: 0, y: 0 },
+          data: { label: 'Order Completed', subType: 'order_event' },
+        },
+        {
+          id: 'act-eligibility',
+          type: 'action',
+          position: { x: 0, y: 100 },
+          data: {
+            label: 'Check Eligibility',
+            subType: 'restaurant_feedback_eligibility',
+          },
+        },
+        {
+          id: 'act-msg',
+          type: 'action',
+          position: { x: 0, y: 200 },
+          data: {
+            label: 'Send Feedback',
+            subType: 'whatsapp_message',
+          },
+        },
+      ],
+      edges: [
+        { id: 'e1', source: 'trig-1', target: 'act-eligibility' },
+        { id: 'e2', source: 'act-eligibility', target: 'act-msg' },
+      ],
+    }
+
+    // Mock an ineligible order (status is preparing, not completed)
+    const mockSupabase = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { id: 'ord-ineligible', status: 'preparing' },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    }
+
+    const result = await executeFlowGraph(definition, {
+      runId: 'run-ineligible',
+      flowId: 'flow-1',
+      accountId: 'acc-1',
+      versionNumber: 1,
+      initialVariables: { orderId: 'ord-ineligible' },
+      maxRetries: 3,
+      supabase: mockSupabase as any,
+    })
+
+    // Overall status is completed (terminated safely as skipped, not crashed)
+    expect(result.status).toBe('completed')
+    expect(result.stepRuns).toHaveLength(2) // Trigger + Eligibility (skipped)
+    const eligibilityStep = result.stepRuns.find((s) => s.nodeId === 'act-eligibility')
+    expect(eligibilityStep?.status).toBe('skipped')
+    expect(eligibilityStep?.error).toContain('ORDER_NOT_COMPLETED')
+
+    // Downstream WhatsApp action was NOT run
+    const messageStep = result.stepRuns.find((s) => s.nodeId === 'act-msg')
+    expect(messageStep).toBeUndefined()
   })
 })
