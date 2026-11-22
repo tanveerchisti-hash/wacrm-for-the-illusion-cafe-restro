@@ -11,6 +11,8 @@ interface GraphRunnerOptions {
   maxRetries?: number
   timeoutMs?: number
   isDryRun?: boolean
+  previousStepRuns?: StepExecutionResult[]
+  idempotencyKey?: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase?: any
 }
@@ -123,8 +125,39 @@ export async function executeFlowGraph(
       continue
     }
 
-    // 3. Action Node Execution (with Retry capability)
+    // 3. Action Node Execution (with Action-Level Idempotency & Retry capability)
     if (node.type === 'action') {
+      // Action-level idempotency: Check if this node was already completed in a prior attempt
+      const priorCompletedStep = options.previousStepRuns?.find(
+        (s) => s.nodeId === node.id && s.status === 'completed'
+      )
+
+      if (priorCompletedStep) {
+        // Reuse completed output without repeating side effects (e.g. duplicate WhatsApp message)
+        if (priorCompletedStep.output) {
+          variables[node.id] = priorCompletedStep.output
+          Object.assign(variables, priorCompletedStep.output)
+        }
+
+        stepRuns.push({
+          ...priorCompletedStep,
+          reused: true,
+          output: {
+            ...priorCompletedStep.output,
+            reused: true,
+          },
+        })
+
+        // Enqueue next nodes
+        const nextEdges = edges.filter((e) => e.source === node.id)
+        for (const edge of nextEdges) {
+          if (!visited.has(edge.target)) {
+            queue.push(edge.target)
+          }
+        }
+        continue
+      }
+
       let attempts = 0
       const actionOpts = {
         isDryRun: options.isDryRun,
@@ -205,5 +238,6 @@ export async function executeFlowGraph(
     startedAt,
     completedAt,
     durationMs: totalDurationMs,
+    idempotencyKey: options.idempotencyKey,
   }
 }

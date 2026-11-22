@@ -8,6 +8,9 @@ export interface BackendFlowEvent {
   contactId?: string
   orderId?: string
   conversationId?: string
+  eventId?: string
+  idempotencyKey?: string
+  isReplay?: boolean
 }
 
 export interface StepExecutionResult {
@@ -21,6 +24,7 @@ export interface StepExecutionResult {
   input: Record<string, unknown>
   output?: Record<string, unknown>
   error?: string
+  reused?: boolean
 }
 
 export interface FlowExecutionState {
@@ -35,4 +39,7 @@ export interface FlowExecutionState {
   startedAt: string
   completedAt?: string
   durationMs?: number
+  idempotencyKey?: string
+  isDuplicate?: boolean
+  originalRunId?: string
 }
