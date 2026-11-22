@@ -40,8 +40,14 @@ export function RunTraceDrawer({ open, onOpenChange, run }: RunTraceDrawerProps)
   const isRunning = run.status === 'running' || run.status === 'resuming'
   const isWaiting = run.status === 'waiting'
 
-  const state = (run.state || {}) as Partial<FlowExecutionState>
-  const stepRuns: StepExecutionResult[] = state.stepRuns || []
+  
+const state = (run.state || {}) as Partial<FlowExecutionState> & {
+  step_runs?: StepExecutionResult[]
+}
+
+const stepRuns: StepExecutionResult[] =
+  state.step_runs ?? state.stepRuns ?? []
+
 
   // Check if any step failed for diagnostics
   const failedStep = stepRuns.find((s) => s.status === 'failed')
