@@ -24,6 +24,7 @@ import {
   formatDraftCartSummary,
   convertDraftCartToTrialOrderItems,
   type DraftCart,
+  type DraftCartItem,
 } from './draft-cart'
 
 export interface TrialInboundArgs {
@@ -54,12 +55,15 @@ export function isOrderConfirmationPhrase(text: string): boolean {
     .replace(/[.,!।]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .replace(/\b(?:kardo|krdo|kr do)\b/g, 'kar do')
-    .replace(/\bkar\s+di\s+jiye\b/g, 'kar dijiye')
-    .replace(/\b(?:banado|bnado)\b/g, 'bana do')
-    .replace(/\bbhejdo\b/g, 'bhej do')
-    .replace(/\blagado\b/g, 'laga do')
-    .replace(/\b(?:thik|thek)\b/g, 'theek')
+    .replace(/\b(?:kardo|krdo|kr do|karde|krde|kr de|kar de)\b/g, 'kar do')
+    .replace(/\b(?:kardijiye|kar di jiye|kar dijiye|kijiye|kjiye)\b/g, 'kar dijiye')
+    .replace(/\b(?:banado|bnado|banade|bnade)\b/g, 'bana do')
+    .replace(/\b(?:bhejdo|bhejde)\b/g, 'bhej do')
+    .replace(/\b(?:lagado|lagade)\b/g, 'laga do')
+    .replace(/\b(?:thik|thek|thk)\b/g, 'theek')
+    .replace(/\b(?:theek|thik)\s+h\b/g, 'theek hai')
+    .replace(/\bsahi\s+h\b/g, 'sahi hai')
+    .replace(/\b(?:acha|achha)\b/g, 'theek')
 
   // Never interpret questions, cancellations or cart edits as confirmation.
   if (
@@ -70,52 +74,68 @@ export function isOrderConfirmationPhrase(text: string): boolean {
     return false
   }
 
-  // Option 1 and its variations.
+  // Option 1 and its variations (e.g. "1", "1.", "1️⃣", "#1", "1. Confirm Details", "1 confirm")
   if (
-    /^1(?:\s*(?:confirm(?:\s+(?:details|order))?|details|yes|haan))?$/.test(normalized)
+    /^(?:#\s*)?(?:1|1️⃣)(?:[.)\s\-]*\s*(?:confirm(?:\s+(?:details|order))?|details|yes|haan))?$/i.test(normalized)
   ) {
     return true
   }
 
   // Short positive replies. The caller must verify an active draft cart.
   if (
-    /^(?:haanji|hanji|haan ji|han ji|haan|han|ha|ji|yes|ok|okay|sure|bilkul)(?:\s+(?:ji|please))?$/.test(normalized)
+    /^(?:haanji|hanji|haan ji|han ji|haan|han|ha|ji|yes|ok|okay|sure|bilkul|theek|theek hai|sahi|sahi hai|done|pakka)(?:\s+(?:ji|please|bhai|yaar|yr))?$/i.test(normalized)
   ) {
     return true
   }
 
-  // Remove optional polite prefixes.
-  const intent = normalized
+  // Remove optional conversational prefixes (e.g. "theek hai ", "haan ji ", "ok bhai ", etc.)
+  let intent = normalized
     .replace(
-      /^(?:(?:haanji|hanji|haan ji|han ji|haan|han|ha|ji|yes|yeah|yup|ok|okay|sure|bilkul|please|plz|bhai|ab)\s+)+/,
+      /^(?:(?:theek\s+hai|theek|sahi\s+hai|sahi|haanji|hanji|haan\s+ji|han\s+ji|haan|han|ha|ji|yes|yeah|yup|ok|okay|sure|bilkul|please|plz|bhai|ab)\s+)+/i,
+      ''
+    )
+    .trim()
+
+  // Remove optional trailing address terms (e.g. " bhai", " please", " ji", " yaar")
+  intent = intent
+    .replace(
+      /(?:\s+(?:bhai|ji|please|plz|sir|madam|yaar|yr))+$/i,
       ''
     )
     .trim()
 
   const confirmationPatterns: RegExp[] = [
-    // Confirm after action words: "kardo confirm", "kar do confirm"
-    /^(?:kar do|kar dijiye|karo|kijiye|kar de|kr de)\s+confirm(?:ed)?$/,
-    // Confirm, confirm order, confirm kar do, confirm kar dijiye.
-    /^(?:i\s+|order\s+)?confirm(?:ed)?(?:\s+(?:this|it|details|(?:the\s+)?order))?(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|kr de|kar de|please))?$/,
-    // Done, final, pakka, done kar do, order final kar do.
-    /^(?:(?:ye|mera|is|iss|this)\s+)?(?:order\s+)?(?:done|final|pakka)(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|hai))?$/,
+    // Confirm after action words: "kar do confirm", "kar dijiye confirm", "karo confirm"
+    /^(?:kar do|kar dijiye|karo)\s+confirm(?:ed)?$/,
 
-    // Bana do, bhej do, order laga do, order place kar do.
-    /^(?:(?:ye|mera|is|iss|this)\s+)?(?:order\s+)?(?:bana|banwa|bna|bhej|laga|ready|taiyar|tayyar|place|send)(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|do|de do|dijiye|kar de))$/,
+    // Confirm, confirm order, confirm kar do, confirm kar dijiye, confirm details, confirm this/it
+    /^(?:i\s+|order\s+)?confirm(?:ed)?(?:\s+(?:this|it|details|(?:the\s+)?order))?(?:\s+(?:kar do|kar dijiye|karwa do|karo|please))?$/,
 
-    // Theek hai, theek kar do, sahi hai, haan theek hai bana do.
-    /^(?:theek|sahi)(?:\s+hai)?(?:\s+(?:kar do|kar dijiye|karwa do|karo|kijiye|bana do|bhej do|order kar do))?$/,
+    // Explicit confirmation with "kar do" / "kar dijiye" appended or preceded
+    /^(?:(?:ye|mera|is|iss|this)\s+)?(?:order\s+)?confirm(?:ed)?(?:\s+(?:kar do|kar dijiye|karwa do|karo|yahi|ye))?$/,
 
-    // Kar do, kardo, kar dijiye, order kar do.
-    /^(?:order\s+)?(?:kar do|kar dijiye|karwa do|karo|kijiye|kr de|kar de|do it)$/,
+    // Theek hai confirm, sahi hai confirm, theek hai confirm kar do
+    /^(?:theek|sahi)(?:\s+hai)?\s+confirm(?:ed)?(?:\s+(?:kar do|kar dijiye|karwa do|karo))?$/,
 
-    // Order kr de yahi.
-    /^(?:order\s+)?kr\s+de\s+yahi$/,
+    // Done, final, pakka, done kar do, order final kar do
+    /^(?:(?:ye|mera|is|iss|this)\s+)?(?:order\s+)?(?:done|final|pakka)(?:\s+(?:kar do|kar dijiye|karwa do|karo|hai))?$/,
 
-    // Bana ke bhej do.
+    // Bana do, bhej do, order laga do, order place kar do
+    /^(?:(?:ye|mera|is|iss|this)\s+)?(?:order\s+)?(?:bana|banwa|bna|bhej|laga|ready|taiyar|tayyar|place|send)(?:\s+(?:kar do|kar dijiye|karwa do|karo|do|de do|dijiye))$/,
+
+    // Theek hai, theek kar do, sahi hai, haan theek hai bana do
+    /^(?:theek|sahi)(?:\s+hai)?(?:\s+(?:kar do|kar dijiye|karwa do|karo|bana do|bhej do|order kar do))?$/,
+
+    // Kar do, kar dijiye, order kar do, do it
+    /^(?:order\s+)?(?:kar do|kar dijiye|karwa do|karo|do it)$/,
+
+    // Order kar do yahi
+    /^(?:order\s+)?kar do\s+yahi$/,
+
+    // Bana ke bhej do
     /^(?:order\s+)?bana\s+ke\s+bhej\s+(?:do|dijiye)$/,
 
-    // English confirmation commands.
+    // English confirmation commands
     /^(?:place\s+(?:the\s+)?order|send\s+(?:the\s+)?order|send\s+it|go\s+ahead|proceed(?:\s+with\s+(?:the\s+)?order)?)$/,
   ]
 
@@ -166,9 +186,11 @@ export function parseSummaryFromText(summaryText: string): {
       continue
     }
 
+    const cleanLine = line.replace(/[*_]/g, '').trim()
+
     // 1. Check for Total / Subtotal line
-    const totalMatch = line.match(
-      /(?:\*|_)?(?:food\s*subtotal|subtotal|estimated\s*total|total\s*amount|grand\s*total|bill|total)(?:\*|_)?[\s*:\-–=]+(?:\*|_)?₹?\s*(\d+(?:\.\d+)?)/i,
+    const totalMatch = cleanLine.match(
+      /(?:food\s*subtotal|subtotal|estimated\s*total|total\s*amount|grand\s*total|bill|total)[\s*:\-–=]+₹?\s*(\d+(?:\.\d+)?)/i,
     )
     if (totalMatch) {
       const parsedTotal = parseFloat(totalMatch[1])
@@ -180,8 +202,8 @@ export function parseSummaryFromText(summaryText: string): {
 
     // 2. Pattern 1: Single-line item with price
     // "🍕 1 x Chicken Pizza (7-inch) - ₹149" or "- 2x Veg Burger: ₹240" or "Cold Coffee (2) @ ₹99 = ₹198"
-    const singleMatch = line.match(
-      /^(?:[-*•🍕🍔🥤☕🥪🍟🍗\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX]\s+)?([A-Za-z0-9\s()&'\/\[\]\-]+?)(?:\s*\((\d+)\))?\s*[@:\-–=]+\s*₹?\s*(\d+(?:\.\d+)?)(?:\s*[@=xX]\s*₹?\s*(\d+(?:\.\d+)?))?$/u,
+    const singleMatch = cleanLine.match(
+      /^(?:[-•🍕🍔🥤☕🥪🍟🍗🍢🍣🥟🍰🍦\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX×*]\s+)?([A-Za-z0-9\s()&'\/\[\]\-]+?)(?:\s*\((\d+)\))?\s*[@:\-–=]+\s*₹?\s*(\d+(?:\.\d+)?)(?:\s*[@=xX×*]\s*₹?\s*(\d+(?:\.\d+)?))?$/u,
     )
     if (singleMatch && singleMatch[4]) {
       const rawName = (singleMatch[2] || '').replace(/^[*_#•\-–\s]+|[*_#\s]+$/g, '').trim()
@@ -206,14 +228,14 @@ export function parseSummaryFromText(summaryText: string): {
     // 3. Pattern 2: Two-line format
     // Line i: "🍕 1 x Chicken Pizza (7-inch)"
     // Line i+1: "₹149 x 1 = ₹149" or "₹149" or "@ ₹149 = ₹149"
-    const itemHeaderMatch = line.match(
-      /^(?:[-*•🍕🍔🥤☕🥪🍟🍗\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX]\s+)?([A-Za-z0-9\s()&'\/\[\]\-]+?)(?:\s*\((\d+)\))?$/u,
+    const itemHeaderMatch = cleanLine.match(
+      /^(?:[-•🍕🍔🥤☕🥪🍟🍗🍢🍣🥟🍰🍦\d]+[.)\s\-]*\s*)?(?:(\d+)\s*[xX×*]\s+)?([A-Za-z0-9\s()&'\/\[\]\-]+?)(?:\s*\((\d+)\))?$/u,
     )
     if (itemHeaderMatch && i + 1 < lines.length) {
       const rawName = (itemHeaderMatch[2] || '').replace(/^[*_#•\-–\s]+|[*_#\s]+$/g, '').trim()
-      const nextLine = lines[i + 1]
-      const priceCalcMatch = nextLine.match(
-        /^₹?\s*(\d+(?:\.\d+)?)\s*(?:[xX*@]\s*(\d+))?\s*(?:=\s*₹?\s*(\d+(?:\.\d+)?))?$/,
+      const cleanNextLine = lines[i + 1].replace(/[*_]/g, '').trim()
+      const priceCalcMatch = cleanNextLine.match(
+        /^₹?\s*(\d+(?:\.\d+)?)\s*(?:[xX×*@]\s*(\d+))?\s*(?:=\s*₹?\s*(\d+(?:\.\d+)?))?$/,
       )
 
       if (
@@ -243,6 +265,73 @@ export function parseSummaryFromText(summaryText: string): {
   }
 
   return { items, subtotal }
+}
+
+/**
+ * Retrieve active draft cart for contact, or recover it from recent bot order summaries
+ * in the conversation (e.g. if generated by AI auto-reply or if memory/DB was cleared).
+ */
+export async function getOrRecoverActiveDraftCart(
+  db: SupabaseClient,
+  accountId: string,
+  contactId: string,
+  conversationId?: string | null,
+): Promise<DraftCart | null> {
+  const existingCart = await getActiveDraftCart(db, accountId, contactId)
+  if (existingCart && existingCart.items && existingCart.items.length > 0) {
+    return existingCart
+  }
+
+  if (!conversationId) {
+    return null
+  }
+
+  try {
+    const { data: recentMsgs } = await db
+      .from('messages')
+      .select('content_text, created_at')
+      .eq('conversation_id', conversationId)
+      .neq('sender_type', 'customer')
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    for (const msg of recentMsgs ?? []) {
+      if (msg.content_text) {
+        const parsed = parseSummaryFromText(msg.content_text)
+        if (parsed && parsed.items && parsed.items.length > 0) {
+          const draftItems: DraftCartItem[] = parsed.items.map((pi) => {
+            const catItem = findCatalogItem(pi.name)
+            return {
+              itemId: catItem?.id || `recovered-${encodeURIComponent(pi.name.toLowerCase())}`,
+              name: catItem?.name || pi.name,
+              category: catItem?.category || 'food',
+              portion: catItem?.portion,
+              emoji: catItem?.emoji || '🍴',
+              quantity: pi.quantity,
+              unitPrice: pi.unit_price,
+              totalPrice: pi.total_price,
+            }
+          })
+
+          const recoveredCart: DraftCart = {
+            accountId,
+            contactId,
+            conversationId,
+            items: draftItems,
+            subtotal: parsed.subtotal,
+            status: 'active',
+          }
+
+          // Persist the recovered cart so subsequent calls find it immediately
+          return await saveDraftCart(db, recoveredCart)
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[order-trial] Failed to recover draft cart from message history:', err)
+  }
+
+  return null
 }
 
 /**
@@ -530,7 +619,7 @@ export async function handleRestaurantTrialInbound(
   // STEP 2A: Cart Removal Request (e.g. "cold coffee remove kardo", "pizza hata do")
   const isRemove = isRemoveItemRequest(inboundText)
   if (isRemove) {
-    const existingCart = await getActiveDraftCart(db, accountId, contactId)
+    const existingCart = await getOrRecoverActiveDraftCart(db, accountId, contactId, conversationId)
     if (existingCart && existingCart.items.length > 0) {
       const rawText = inboundText
         .replace(/\b(?:remove|hata\s*do|cancel|hatao|delete)\b/gi, '')
@@ -575,7 +664,7 @@ export async function handleRestaurantTrialInbound(
   if (orderResult && orderResult.items.length > 0) {
     // Check if customer is explicitly adding items to an existing draft cart
     const isExplicitAdd = /\b(?:aur\b|add\b|bhi\b)/i.test(inboundText)
-    const existingCart = await getActiveDraftCart(db, accountId, contactId)
+    const existingCart = await getOrRecoverActiveDraftCart(db, accountId, contactId, conversationId)
 
     let updatedCart: DraftCart
 
@@ -628,12 +717,12 @@ export async function handleRestaurantTrialInbound(
 
   // STEP 2C: Final Order Confirmation ("1", "Confirm Details", "Yes confirm this", "Order confirm kardo")
   if (isOrderConfirmationPhrase(inboundText)) {
-    // Retrieve the saved structured draft cart as the single source of truth
-    const draftCart = await getActiveDraftCart(db, accountId, contactId)
+    // Retrieve the saved structured draft cart as the single source of truth,
+    // or recover from recent bot order summary messages if missing/AI-generated
+    const draftCart = await getOrRecoverActiveDraftCart(db, accountId, contactId, conversationId)
 
     if (!draftCart || !draftCart.items || draftCart.items.length === 0) {
-      // If no draft exists, politely explain that no saved cart was found.
-      // Do not attempt to parse old chat messages.
+      // If no draft exists and no recent summary could be recovered, explain to customer
       await engineSendText({
         accountId,
         userId: configOwnerUserId,

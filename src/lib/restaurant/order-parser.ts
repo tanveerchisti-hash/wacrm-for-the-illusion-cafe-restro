@@ -53,7 +53,7 @@ export interface OrderCartResult {
 function cleanFillerWords(text: string): string {
   return text
     .replace(
-      /\b(?:ye\s+order\s+confirm\s*(?:kar\s*do|kardo)?|order\s+confirm\s*(?:kar\s*do|kardo)?|confirm\s*(?:kar\s*do|kardo|karo|kijiye)?|ye\s+order|ye|yahi|bhi|hoga|kardo|kar\s*do|karo|chahiye|mangwa\s*do|bhej\s*do|pack\s*kardo|pack\s*karo|add\s*kardo|add\s*kar\s*do|add|kr\s*do|krdo|de\s*do|dedo|lena\s*hai|karwaye|please|pls)\b/gi,
+      /\b(?:ye\s+order\s+confirm\s*(?:kar\s*do|kardo|kr\s*do|krdo|kar\s*de|karde|kr\s*de|krde)?|order\s+confirm\s*(?:kar\s*do|kardo|kr\s*do|krdo|kar\s*de|karde|kr\s*de|krde)?|confirm\s*(?:kar\s*do|kardo|kr\s*do|krdo|kar\s*de|karde|kr\s*de|krde|karo|kijiye)?|ye\s+order|ye|yahi|bhi|hoga|kardo|kar\s*do|kar\s*de|karde|kr\s*do|krdo|kr\s*de|krde|karo|kijiye|chahiye|mangwa\s*do|mangwa\s*de|bhej\s*do|bhej\s*de|bhejde|bana\s*do|bana\s*de|banade|pack\s*kardo|pack\s*karo|pack\s*kar\s*de|pack\s*kr\s*de|add\s*kardo|add\s*kar\s*do|add\s*kar\s*de|add\s*kr\s*de|add|de\s*do|dedo|de\s*de|dede|de\s*dijiye|kar\s*dijiye|kardijiye|lena\s*hai|karwaye|please|pls|bhai)\b/gi,
       '',
     )
     .trim()

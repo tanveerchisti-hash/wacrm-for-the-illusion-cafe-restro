@@ -60,6 +60,7 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
 
       // Standard English
       expect(isOrderConfirmationPhrase('confirm')).toBe(true)
+      expect(isOrderConfirmationPhrase('Confirm')).toBe(true)
       expect(isOrderConfirmationPhrase('confirm order')).toBe(true)
       expect(isOrderConfirmationPhrase('confirm details')).toBe(true)
       expect(isOrderConfirmationPhrase('yes confirm')).toBe(true)
@@ -69,8 +70,23 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
       expect(isOrderConfirmationPhrase('yes confirm order')).toBe(true)
       expect(isOrderConfirmationPhrase('place order')).toBe(true)
       expect(isOrderConfirmationPhrase('proceed')).toBe(true)
+      expect(isOrderConfirmationPhrase('ok confirm')).toBe(true)
 
       // Hinglish / Hindi variants
+      expect(isOrderConfirmationPhrase('Thik hai confirm kr de')).toBe(true)
+      expect(isOrderConfirmationPhrase('thik hai confirm kardo')).toBe(true)
+      expect(isOrderConfirmationPhrase('theek hai confirm kr de')).toBe(true)
+      expect(isOrderConfirmationPhrase('theek hai confirm kar do')).toBe(true)
+      expect(isOrderConfirmationPhrase('theek hai bhai confirm krde')).toBe(true)
+      expect(isOrderConfirmationPhrase('confirm kr de')).toBe(true)
+      expect(isOrderConfirmationPhrase('confirm kr de bhai')).toBe(true)
+      expect(isOrderConfirmationPhrase('thik h confirm kr de')).toBe(true)
+      expect(isOrderConfirmationPhrase('theek h confirm kr do')).toBe(true)
+      expect(isOrderConfirmationPhrase('sahi hai confirm kr de')).toBe(true)
+      expect(isOrderConfirmationPhrase('1️⃣')).toBe(true)
+      expect(isOrderConfirmationPhrase('done kr de')).toBe(true)
+      expect(isOrderConfirmationPhrase('bhai confirm kr de')).toBe(true)
+      expect(isOrderConfirmationPhrase('haan bhai confirm kr de')).toBe(true)
       expect(isOrderConfirmationPhrase('confirm kardo')).toBe(true)
       expect(isOrderConfirmationPhrase('confirm kar do')).toBe(true)
       expect(isOrderConfirmationPhrase('ha confirm')).toBe(true)
@@ -816,6 +832,215 @@ describe('Restaurant Order Trial Webhook Handler & Real-World Integrations', () 
       // Zero inserts attempted
       expect(insertCount).toBe(0)
       const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('already received and awaiting kitchen confirmation'),
+        }),
+      )
+    })
+
+    it('Test E: recovers cart from recent bot order summary message when DB draft cart is missing and customer confirms with "Thik hai confirm kr de"', async () => {
+      const capturedOrders: { subtotal?: number; items?: unknown[] }[] = []
+      const createdOrder = {
+        id: 'order-test-recovered',
+        account_id: ACCOUNT_ID,
+        contact_id: CONTACT_ID,
+        conversation_id: CONVERSATION_ID,
+        order_number: 'ORD-999001',
+        status: 'pending_kitchen',
+        subtotal: 347,
+        delivery_fee: 0,
+        total_amount: 347,
+      }
+
+      // Simulate recent message from bot containing the AI or webhook order summary
+      const botSummaryMsg = {
+        id: 'msg-bot-summary-1',
+        conversation_id: CONVERSATION_ID,
+        sender_type: 'bot',
+        content_text:
+          `🍽️ *ILLUSION CAFE & RESTAURANT*\n\n` +
+          `🧾 *Your Order Summary*\n\n` +
+          `🍕 *1 × Chicken Pizza (7-inch)*\n` +
+          `₹149 × 1 = ₹149\n\n` +
+          `☕ *2 × Cold Coffee (200 ml)*\n` +
+          `₹99 × 2 = ₹198\n\n` +
+          `💰 *Food Subtotal: ₹347*\n\n` +
+          `Would you like to confirm these details or make changes?\n\n` +
+          `1️⃣ Confirm Details\n` +
+          `2️⃣ Add More Items\n` +
+          `3️⃣ Remove an Item\n` +
+          `4️⃣ Cancel Enquiry\n\n` +
+          `👉 Reply with 1, 2, 3 or 4.`,
+        created_at: new Date(Date.now() - 60000).toISOString(),
+      }
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            const query = createChainedMock(null)
+            query.insert = vi.fn().mockImplementation((payload) => {
+              capturedOrders.push(payload)
+              return {
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({ data: createdOrder, error: null }),
+                }),
+              }
+            })
+            return query
+          }
+          if (table === 'messages') {
+            const query = createChainedMock([botSummaryMsg])
+            query.limit = vi.fn().mockResolvedValue({ data: [botSummaryMsg], error: null })
+            return query
+          }
+          if (table === 'restaurant_trial_draft_carts') {
+            // DB has no active draft cart row
+            const query = createChainedMock(null)
+            query.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null })
+            return query
+          }
+          return createChainedMock(null)
+        }),
+      } as unknown as SupabaseClient
+
+      // Customer sends "Thik hai confirm kr de"
+      const result = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-cust-confirm-1', type: 'text' },
+        inboundText: 'Thik hai confirm kr de',
+        interactiveReplyId: null,
+      })
+
+      expect(result.handled).toBe(true)
+      expect(capturedOrders).toHaveLength(1)
+      expect(capturedOrders[0].subtotal).toBe(347)
+      expect(capturedOrders[0].items).toHaveLength(2)
+
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Order #ORD-999001 Received!'),
+        }),
+      )
+    })
+
+    it('Test F: matches exact screenshot sequence ("Thik hai confirm kr de" -> "Confirm" -> "1")', async () => {
+      const createdOrder = {
+        id: 'order-test-f',
+        account_id: ACCOUNT_ID,
+        contact_id: CONTACT_ID,
+        conversation_id: CONVERSATION_ID,
+        order_number: 'ORD-999002',
+        status: 'pending_kitchen',
+        subtotal: 347,
+        delivery_fee: 0,
+        total_amount: 347,
+      }
+
+      const botSummaryMsg = {
+        id: 'msg-bot-summary-2',
+        conversation_id: CONVERSATION_ID,
+        sender_type: 'bot',
+        content_text:
+          `🍽️ *ILLUSION CAFE & RESTAURANT*\n\n` +
+          `🧾 *Your Order Summary*\n\n` +
+          `🍕 *1 × Chicken Pizza (7-inch)*\n` +
+          `₹149 × 1 = ₹149\n\n` +
+          `☕ *2 × Cold Coffee (200 ml)*\n` +
+          `₹99 × 2 = ₹198\n\n` +
+          `💰 *Food Subtotal: ₹347*\n\n` +
+          `Would you like to confirm these details or make changes?\n\n` +
+          `1️⃣ Confirm Details\n` +
+          `2️⃣ Add More Items\n` +
+          `3️⃣ Remove an Item\n` +
+          `4️⃣ Cancel Enquiry\n\n` +
+          `👉 Reply with 1, 2, 3 or 4.`,
+        created_at: new Date(Date.now() - 60000).toISOString(),
+      }
+
+      let activeOrderInDb: typeof createdOrder | null = null
+
+      const db = {
+        from: vi.fn((table: string) => {
+          if (table === 'restaurant_trial_orders') {
+            const query = createChainedMock(activeOrderInDb)
+            query.insert = vi.fn().mockImplementation(() => {
+              activeOrderInDb = createdOrder
+              return {
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({ data: createdOrder, error: null }),
+                }),
+              }
+            })
+            return query
+          }
+          if (table === 'messages') {
+            const query = createChainedMock([botSummaryMsg])
+            query.limit = vi.fn().mockResolvedValue({ data: [botSummaryMsg], error: null })
+            return query
+          }
+          if (table === 'restaurant_trial_draft_carts') {
+            const query = createChainedMock(null)
+            query.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null })
+            return query
+          }
+          return createChainedMock(null)
+        }),
+      } as unknown as SupabaseClient
+
+      // 1. Customer sends "Thik hai confirm kr de"
+      const res1 = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-f1', type: 'text' },
+        inboundText: 'Thik hai confirm kr de',
+        interactiveReplyId: null,
+      })
+      expect(res1.handled).toBe(true)
+      expect(activeOrderInDb).not.toBeNull()
+
+      // 2. Customer then sends "Confirm"
+      const res2 = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-f2', type: 'text' },
+        inboundText: 'Confirm',
+        interactiveReplyId: null,
+      })
+      expect(res2.handled).toBe(true)
+
+      // 3. Customer then sends "1"
+      const res3 = await handleRestaurantTrialInbound({
+        db,
+        accountId: ACCOUNT_ID,
+        contactId: CONTACT_ID,
+        conversationId: CONVERSATION_ID,
+        configOwnerUserId: USER_ID,
+        message: { id: 'msg-f3', type: 'text' },
+        inboundText: '1',
+        interactiveReplyId: null,
+      })
+      expect(res3.handled).toBe(true)
+
+      const { engineSendText } = await import('@/lib/flows/meta-send')
+      // Must have sent the order received confirmation
+      expect(engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Order #ORD-999002 Received!'),
+        }),
+      )
+      // Must have sent idempotent reminder for subsequent confirmations
       expect(engineSendText).toHaveBeenCalledWith(
         expect.objectContaining({
           text: expect.stringContaining('already received and awaiting kitchen confirmation'),

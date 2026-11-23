@@ -164,4 +164,11 @@ describe('Deterministic Order Parser (Hindi, Hinglish & English)', () => {
     expect(parseCustomerOrder('kya cold coffee milega?')).toBeNull()
     expect(parseCustomerOrder('Menu dikhao please')).toBeNull()
   })
+
+  it('parses food orders with Hinglish action verbs like "kr de", "kar de", "bana de"', () => {
+    const res = parseCustomerOrder('1 chicken pizza aur 2 cold coffee kr de')
+    expect(res).not.toBeNull()
+    expect(res?.items).toHaveLength(2)
+    expect(res?.subtotal).toBe(347)
+  })
 })
